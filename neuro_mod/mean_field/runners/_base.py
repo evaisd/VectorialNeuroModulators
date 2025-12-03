@@ -9,11 +9,10 @@ ___all__ = [
     'SimRunner',
 ]
 
-class SimRunner(ABC, AttrDict):
+class SimRunner(ABC):
 
-    def __init__(self, **params):
-        super().__init__(**params)
-        pass
+    def __init__(self, lif_mft):
+        self.lif = lif_mft
 
     @abstractmethod
     def _gen_params(self, **params):
@@ -38,11 +37,11 @@ class SimRunner(ABC, AttrDict):
 
 class SweepRunner(ABC):
 
-    def __init__(self, sweep_param: str, mode: str = 'new', **params):
+    def __init__(self, sweep_param: str, mode: str = 'new', **lif_mf_params):
         self.sweep_param = sweep_param
         self.mode = mode
-        self.params = params.copy()
-        self._params_origin = deepcopy(params)
+        self.params = lif_mf_params.copy()
+        self._params_origin = deepcopy(lif_mf_params)
         pass
 
     def _get_params(self, sweep_param_val: float) -> dict:

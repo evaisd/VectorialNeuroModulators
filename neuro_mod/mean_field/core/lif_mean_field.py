@@ -7,36 +7,33 @@ class LIFMeanField:
     def __init__(
             self,
             n_clusters: int,
-            c_matrix: np.ndarray,
-            j_matrix: np.ndarray,
-            ext_mu: np.ndarray,
-            ext_sigma: np.ndarray,
-            tau_membrane: np.ndarray | None,
-            tau_synaptic: np.ndarray | None,
-            threshold: float | list[float],
-            reset_voltage: float | list[float],
+            c_matrix: np.ndarray[np.ndarray[int]],
+            j_matrix: np.ndarray[np.ndarray[float]],
+            j_ext: np.ndarray[float],
+            c_ext: np.ndarray[int],
+            nu_ext: np.ndarray[float],
+            tau_membrane: np.ndarray[float] | list[float],
+            tau_synaptic: np.ndarray[float] | list[float],
+            threshold: float | list[float] | np.ndarray[float],
+            reset_voltage: float | list[float] | np.ndarray[float],
             tau_refractory: float = 0.,
             *args,
             **kwargs
     ):
         self.n_populations = int(n_clusters)
         self.J_matrix = np.asarray(j_matrix, dtype=float)
+        self.C_matrix = np.asarray(c_matrix, dtype=int)
         self.C_matrix = self._verify_att_shape(c_matrix,
                                                (self.n_populations, self.n_populations),
                                                "C Matrix")
         self.J_matrix = self._verify_att_shape(j_matrix,
                                                (self.n_populations, self.n_populations),
                                                "J Matrix")
-        self.ext_mu = np.asarray(ext_mu, dtype=float)
-        self.ext_sigma = np.asarray(ext_sigma, dtype=float)
-        self.ext_mu = self._verify_att_shape(ext_mu,
-                                             (self.n_populations,),
-                                             "External mu")
-        self.ext_sigma = self._verify_att_shape(ext_sigma,
-                                                (self.n_populations,),
-                                                "External sigma")
+        c_ext = np.asarray(c_ext, dtype=int)
+        j_ext = np.asarray(j_ext, dtype=float)
+        self.ext_mu = j_ext * c_ext * tau_membrane * nu_ext
+        self.ext_sigma = j_ext * j_ext * c_ext * tau_membrane * nu_ext
         self.tau_m = self._verify_att_shape(tau_membrane, (self.n_populations,), "tau_m")
-
         self.tau_s = self._verify_att_shape(tau_synaptic, (self.n_populations,), "tau_s")
         self.tau_ref = self._verify_att_shape(tau_refractory, (self.n_populations,), "tau_ref")
         self.threshold = self._verify_att_shape(threshold, (self.n_populations,), "V threshold")
@@ -55,7 +52,7 @@ class LIFMeanField:
         if self._ambient_pops.size > 0:
             nu_p[self._ambient_pops] = self._nu[self._ambient_pops]
         mu = (self.A_mat @ nu_p + self.ext_mu)[self._dynamic_pops]
-        var = (1 + self.delta) * (self.B_mat @ nu_p + self.ext_sigma)
+        var = self.B_mat @ nu_p + self.ext_sigma
         sigma = np.sqrt(np.maximum(var, 1e-12) / 1.)[self._dynamic_pops]
         return mu, sigma
 
@@ -92,7 +89,7 @@ class LIFMeanField:
             nu_init: np.ndarray = None,
     ):
         from scipy.optimize import root
-        nu_init = np.zeros(self.n_populations) if nu_init is None else nu_init
+        nu_init = np.zeros(self.n_populations) if nu_init is None else np.asarray(nu_init, float)
         self._nu = nu_init
         # residuals = self._fixed_point_residual(nu_init)
         sol = root(

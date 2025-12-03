@@ -34,7 +34,7 @@ architecture:
       - 5.0
 
 stimulus:
-  stimulus_shape: diff2exp
+  stimulus_shape: diff2exp  # or linear of box
   onset: 1.0
   duration: 10.0
   amplitude: 0.05
@@ -57,7 +57,7 @@ external_currents:
 simulation:
   delta_t: 0.001
   duration_sec: 10.0
-  mechanism: analytic
+  mechanism: analytic  # or euler
   random_seed: 256
   n_neurons: 2000
   n_excitatory: 1600
