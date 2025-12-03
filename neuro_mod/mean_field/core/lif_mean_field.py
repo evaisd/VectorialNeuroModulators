@@ -3,6 +3,31 @@ import numpy as np
 
 
 class LIFMeanField:
+    """Mean-field model of a clustered LIF (leaky integrate-and-fire) network.
+
+    This class implements population-rate dynamics for a recurrent network with
+    clustered structure, together with utilities for computing fixed points and
+    their linear stability.
+
+    Args:
+        n_clusters: Number of populations (clusters) in the network.
+        c_matrix: Connectivity matrix containing the number of synapses from
+            each presynaptic to each postsynaptic population, shape
+            `(n_clusters, n_clusters)`.
+        j_matrix: Synaptic efficacy matrix (PSC increments per spike), shape
+            `(n_clusters, n_clusters)`.
+        j_ext: External synaptic efficacies per population.
+        c_ext: External in-degrees per population (number of external synapses).
+        nu_ext: External Poisson input rates per population (Hz).
+        tau_membrane: Membrane time constants for each population (seconds).
+        tau_synaptic: Synaptic time constants for each population (seconds).
+        threshold: Firing thresholds for each population.
+        reset_voltage: Reset voltages after a spike for each population.
+        tau_refractory: Absolute refractory period for each population
+            (seconds). Defaults to `0.`.
+        *args: Additional positional arguments (ignored, for compatibility).
+        **kwargs: Additional keyword arguments (ignored, for compatibility).
+    """
 
     def __init__(
             self,
@@ -47,6 +72,17 @@ class LIFMeanField:
         self._nu = np.zeros(self.n_populations)
 
     def equations(self, nu: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Compute mean and standard deviation of input given population rates.
+
+        Args:
+            nu: Firing rates of dynamic populations, shape `(n_dynamic,)`.
+
+        Returns:
+            Tuple `(mu, sigma)` where:
+
+            * `mu` is the mean input current to each dynamic population.
+            * `sigma` is the standard deviation of the input.
+        """
         nu_p = np.zeros(self.n_populations)
         nu_p[self._dynamic_pops] = nu
         if self._ambient_pops.size > 0:
@@ -61,6 +97,16 @@ class LIFMeanField:
             mu: np.ndarray,
             sigma: np.ndarray,
             **params) -> np.ndarray:
+        """Compute firing rates from input statistics using the LIF transfer.
+
+        Args:
+            mu: Mean input currents for each population.
+            sigma: Standard deviation of input currents for each population.
+            **params: Additional keyword arguments (currently unused).
+
+        Returns:
+            Array of firing rates for each population.
+        """
 
         from scipy import integrate
 
@@ -86,8 +132,18 @@ class LIFMeanField:
 
     def solve_rates(
             self,
-            nu_init: np.ndarray = None,
+            nu_init: np.ndarray | None = None,
     ):
+        """Find a self-consistent fixed point of the mean-field equations.
+
+        Args:
+            nu_init: Optional initial guess for firing rates. If ``None``,
+                a zero vector is used.
+
+        Returns:
+            `scipy.optimize.OptimizeResult` containing the root-finding
+            solution for the dynamic populations.
+        """
         from scipy.optimize import root
         nu_init = np.zeros(self.n_populations) if nu_init is None else np.asarray(nu_init, float)
         self._nu = nu_init
@@ -102,6 +158,18 @@ class LIFMeanField:
         return sol
 
     def determine_stability(self, nu_star: np.ndarray):
+        """Classify the linear stability of a fixed point.
+
+        Args:
+            nu_star: Fixed-point firing rates for all populations.
+
+        Returns:
+            Tuple `(fp_type, eigvals)` where:
+
+            * `fp_type` is a human-readable string describing the fixed-point
+              type (e.g. ``"stable node"`` or ``"saddle"``).
+            * `eigvals` are the eigenvalues of the Jacobian at the fixed point.
+        """
         tol = 1e-6
         jacobian = self._get_jacobian(nu_star)
         eigvals = np.linalg.eig(jacobian)[0]

@@ -4,7 +4,24 @@ import torch.nn as nn
 
 torch.set_default_dtype(torch.float64)
 
+
 class LIFNet(nn.Module):
+    """Recurrent LIF spiking network implemented in PyTorch.
+
+    The network supports analytic or Euler integration of membrane and synaptic
+    dynamics, heterogeneous neuron parameters, and optional external currents.
+
+    Args:
+        synaptic_weights: Recurrent synaptic weight matrix of shape
+            `(n_neurons, n_neurons)`.
+        j_ext: Vector of external synaptic efficacies.
+        tau_membrane: Membrane time constants (scalar, list, or tensor).
+        tau_synaptic: Synaptic time constants (scalar, list, or tensor).
+        tau_refractory: Refractory periods per neuron.
+        threshold: Firing threshold values per neuron.
+        reset_voltage: Reset voltage values per neuron. Defaults to `0.`.
+        delta_t: Time step used for numerical integration (seconds).
+    """
 
     def __init__(
             self,
@@ -33,8 +50,15 @@ class LIFNet(nn.Module):
         self.register_buffer('propagators', self._get_propagators())
 
     def _broadcast_param(self, param) -> torch.Tensor:
-        """
-        Helper: Converts a float, list, or tensor into a 1D tensor of shape [N_neurons].
+        """Convert scalars/lists/tensors to a 1D tensor of length `n_neurons`.
+
+        Args:
+            param: Scalar, list/tuple, or tensor describing a neuron-wise
+                parameter.
+
+        Returns:
+            Tensor of shape `(n_neurons,)` with the parameter broadcasted or
+            validated.
         """
         if isinstance(param, (float, int)):
             # If scalar, repeat it N times
@@ -82,9 +106,28 @@ class LIFNet(nn.Module):
             voltage: torch.Tensor,
             synaptic_current: torch.Tensor,
             stimulus: torch.Tensor,
-            external_currents: torch.Tensor = None,
-            mechanism: str = None
+            external_currents: torch.Tensor | None = None,
+            mechanism: str | None = None,
     ):
+        """Simulate network dynamics over time.
+
+        Args:
+            voltage: Initial membrane voltages, shape `(n_neurons,)`.
+            synaptic_current: Initial synaptic currents, shape `(n_neurons,)`.
+            stimulus: Time series of stimulus currents, shape
+                `(T, n_neurons)`.
+            external_currents: Optional time series of external input, same
+                shape as `stimulus`. If ``None``, zeros are used.
+            mechanism: Integration mechanism, either ``"analytic"`` or
+                ``"euler"``. Defaults to analytic.
+
+        Returns:
+            Tuple `(v_hist, c_hist, s_hist)` where:
+
+            * `v_hist`: Membrane voltages over time.
+            * `c_hist`: Synaptic currents over time.
+            * `s_hist`: Binary spike indicators over time.
+        """
         if external_currents is None:
             external_currents = torch.zeros_like(stimulus)
 
@@ -108,7 +151,8 @@ class LIFNet(nn.Module):
               synaptic_current,
               stimulus,
               external_current,
-              mechanism: str = None):
+              mechanism: str | None = None):
+        """Advance the network state by a single time step."""
 
         is_refractory = ~(self.spikes_timer.round(decimals=6) == 0)
 
