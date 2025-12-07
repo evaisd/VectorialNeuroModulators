@@ -10,6 +10,7 @@ def generate_clustered_weight_matrix(
         random_generator: np.random.Generator = None,
         n_excitatory_background: int = 0,
         n_inhibitory_background: int = 0,
+        types: dict[int, tuple[int, int]] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Generates a clustered m x m weight matrix for a spiking neuron model.
@@ -32,6 +33,7 @@ def generate_clustered_weight_matrix(
             number generator for reproducibility. Defaults to None.
         n_inhibitory_background (Optional[int], optional): Number of background inhibitory
          neurons. Defaults to 0.
+        types (dict[int, str], optional): Dictionary of boundaries of the cluster types. Defaults to None
 
     Returns:
         tuple[np.ndarray, np.ndarray]:
@@ -82,7 +84,8 @@ def generate_clustered_weight_matrix(
         b1 = slice(boundaries[i], boundaries[i + 1])
         b2 = slice(boundaries[j], boundaries[j + 1])
         size = b1.stop - b1.start, b2.stop - b2.start
-        p_matrix[b1, b2] = (rng.random(size=size) <= connectivity[i, j]).astype(np.bool)
+        p_matrix[b1, b2] = _generate_equirowsum_matrix(*size, connectivity[i, j], rng).astype(bool)
+        # p_matrix[b1, b2] = (rng.random(size=size) <= connectivity[i, j]).astype(np.bool)
         j_matrix[b1, b2] = synaptic_strengths[i, j]
         if i <= j:
             cluster_vec[b2] = j + 1
@@ -90,3 +93,14 @@ def generate_clustered_weight_matrix(
     weights = p_matrix * j_matrix
     np.fill_diagonal(weights, 0)
     return weights, cluster_vec
+
+
+def _generate_equirowsum_matrix(n, m, p, rng: np.random.Generator):
+    k = int(p * m)
+    base = np.zeros(m, dtype=np.uint8)
+    base[:k] = 1
+    base[:k] = 1
+    mat = np.tile(base, (n, 1))
+    keys = rng.random([n, m])
+    mat = mat[np.arange(n)[:, None], np.argsort(keys, axis=1)]
+    return mat

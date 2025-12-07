@@ -68,8 +68,8 @@ runner:
       - [0., 60.]
       - [0., 60.]
     focus_nu_density:
-      - 0.5
-      - 0.5
+      - 2.
+      - 2.
     ambient_nu_init:
       - 3.
       - 4.

@@ -76,4 +76,4 @@ class EffectiveMFSweepRunner(MFSweepRunner):
         if len(peaks) > 2:
             pots_at_peaks = potential[peaks]
             peaks = np.sort(peaks[np.argsort(pots_at_peaks)][:2])
-        return potential[peaks], displacement[peaks], lif.ext_mu[0], lif.ext_sigma[0]
+        return potential[peaks], displacement[peaks], np.array([lif.ext_mu[0], lif.ext_sigma[0]])

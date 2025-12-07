@@ -1,3 +1,3 @@
 
 from neuro_mod.spiking_neuron_net.clustering.enlarged import generate_clustered_weight_matrix
-from neuro_mod.spiking_neuron_net.clustering.setup_papadopoulos import get_basic_sim, setup_matrices
+from neuro_mod.spiking_neuron_net.clustering.setup_papadopoulos import setup_matrices

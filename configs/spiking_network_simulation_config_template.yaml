@@ -28,7 +28,7 @@ architecture:
       - -1.9
       - -3.8
     j_potentiated:
-      - 15.75
+      - 10.5
       - 5.45
       - 6.25
       - 5.0
@@ -63,5 +63,5 @@ simulation:
   n_excitatory: 1600
 
 settings:
-  save_dir: test_sim
+  save_dir: simulations
   sim_name: sim_name

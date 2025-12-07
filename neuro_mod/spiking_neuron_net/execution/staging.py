@@ -77,7 +77,7 @@ class StageSimulation(_StageParent):
             "n_excitatory": self.n_excitatory,
             **self.clusters_params
         }
-        c, j, b = clustering.setup_matrices(**params)
+        c, j, b, t = clustering.setup_matrices(**params)
         weights, clusters = clustering.generate_clustered_weight_matrix(
             n_neurons=self.n_neurons,
             boundaries=b,
@@ -85,7 +85,8 @@ class StageSimulation(_StageParent):
             connectivity=c,
             random_generator=self.rng,
             n_excitatory_background=self.clusters_params['n_excitatory_background'],
-            n_inhibitory_background=self.clusters_params['n_inhibitory_background']
+            n_inhibitory_background=self.clusters_params['n_inhibitory_background'],
+            types=t
         )
         return weights, clusters
 

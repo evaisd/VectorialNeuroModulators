@@ -74,7 +74,12 @@ def setup_matrices(
         j_mat[pair] = j_baseline[i % 4]
         c_mat[pair] = connectivity_fraction_probs[i % 4]
 
-    return c_mat, j_mat.T, boundaries
+    types = {}
+    types['E'] = (0, n_excitatory - n_excitatory_background)
+    types['Eb'] = (n_excitatory - n_excitatory_background, n_excitatory)
+    types['I'] = (n_excitatory, n_neurons - n_excitatory_background)
+    types['Ib'] = (n_neurons - n_excitatory_background, n_neurons)
+    return c_mat, j_mat.T, boundaries, types
 
 
 @lru_cache(4)
@@ -98,10 +103,3 @@ def _gen_block(
     np.fill_diagonal(jmat, potentiated * baseline)
     return jmat
 
-
-def get_basic_sim():
-    from spiking_neuron.clustering import generate_clustered_weight_matrix
-    c, j, b = setup_matrices(**PARAMS)
-    return generate_clustered_weight_matrix(n_neurons=PARAMS["N"], boundaries=b, synaptic_strengths=j, connectivity=c,
-                                            n_excitatory_background=PARAMS["background_e"],
-                                            n_inhibitory_background=PARAMS["background_i"])
