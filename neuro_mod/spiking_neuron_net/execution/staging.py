@@ -46,6 +46,7 @@ class StageSimulation(_StageParent):
         self.lif_net = self._get_lif_net()
         self.currents_generator = self._get_external_currents_generator()
         self.stimulus_generator = self._get_stimulus_generator()
+        self.stimulated_clusters = None
         self.save_dir = None
         self.data_file = None
         self._set_stage()
@@ -114,12 +115,25 @@ class StageSimulation(_StageParent):
         data_dir.mkdir(exist_ok=True)
 
     def _gen_stimulus(self):
+        n_clusters = self.clusters_params['n_clusters']
+        stimulated_clusters_prob = self.stimulus_params.pop("stimulated_clusters_prob")
+        self.stimulated_clusters = self.rng.choice(range(1, n_clusters + 1),
+                                                   size=int(n_clusters * stimulated_clusters_prob),
+                                                   replace=False)
+        stimulated_neuron_prob = self.stimulus_params.pop("stimulated_neuron_prob")
+        possible_neurons = np.argwhere(np.isin(self.clusters,
+                                               self.stimulated_clusters)).flatten()
+        stimulated_neurons = self.rng.choice(possible_neurons,
+                                             int(len(possible_neurons) * stimulated_neuron_prob),
+                                             replace=False)
         params = {
+            "n_neurons": self.n_neurons,
             "total_duration": self.duration_sec,
             "delta_t": self.delta_t,
-            "n_neurons": self.n_neurons,
+            "stimulated_neurons": stimulated_neurons,
             **self.stimulus_params
         }
+
         return self.stimulus_generator.generate_stimulus(**params)
 
     def execute(self):
@@ -149,18 +163,22 @@ class StageSimulation(_StageParent):
         spikes = spikes.detach().cpu().numpy()
         spikes = np.astype(spikes, np.bool)
         # ----- 4. Save data:
-        self._save(voltage=voltage, current=current, spikes=spikes)
+        self._save(voltage=voltage,
+                   current=current,
+                   spikes=spikes,
+                   stimulus=stimulus)
         # ----- 5. Plot:
         self._plot(spikes=spikes)
 
-    def _save(self, voltage, current, spikes):
+    def _save(self, voltage, current, spikes, stimulus):
         self.data_file = self.save_dir / "data" / "outputs.npz"
         np.savez(self.data_file,
                  voltage=voltage,
                  current=current,
                  spikes=spikes,
                  clusters=self.clusters,
-                 weights=self.weights)
+                 weights=self.weights,
+                 stimulus=stimulus)
 
     def _plot(self, spikes: np.ndarray):
         import matplotlib.pyplot as plt
