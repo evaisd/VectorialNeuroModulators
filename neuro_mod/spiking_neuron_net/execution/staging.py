@@ -143,8 +143,11 @@ class StageSimulation(_StageParent):
                                                 external_currents=external_currents,
                                                 mechanism=self.mechanism)
         voltage = voltage.detach().cpu().numpy()
+        voltage = np.astype(voltage, np.float64)
         current = current.detach().cpu().numpy()
+        current = np.astype(current, np.float64)
         spikes = spikes.detach().cpu().numpy()
+        spikes = np.astype(spikes, np.bool)
         # ----- 4. Save data:
         self._save(voltage=voltage, current=current, spikes=spikes)
         # ----- 5. Plot:
@@ -164,10 +167,25 @@ class StageSimulation(_StageParent):
         times, neurons = spikes.nonzero()
         fig, ax = plt.subplots(figsize=(16, 8))
         ax.scatter(times * self.delta_t, neurons, s=0.1, color='black')  # each spike = one dot
+
+        population_markers = [
+            (0, self.n_excitatory, 'skyblue', 'Excitatory'),
+            (self.n_excitatory, self.n_neurons, 'salmon', 'Inhibitory'),
+            (self.n_excitatory - self.clusters_params["n_excitatory_background"],
+             self.n_excitatory, 'blue', 'background excitatory'),
+            (self.n_neurons - self.clusters_params["n_inhibitory_background"],
+             self.n_neurons, 'red', 'background inhibitory'),
+        ]
+        for y_min, y_max, color, label in population_markers:
+            ax.axhspan(ymin=y_min, ymax=y_max, color=color, alpha=0.3,
+                       label=label)
+
         ax.set_xlabel('Time [S]', fontsize=16)
         ax.set_ylabel('Neuron index', fontsize=16)
         ax.set_title('Spike Raster Plot', fontsize=24)
-        fig.gca().invert_yaxis()
+        ax.set_xlim(0, self.duration_sec)
+        ax.set_ylim(0, self.n_neurons)
+        # fig.gca().invert_yaxis()
         fig.tight_layout()
 
         plt_path = self.save_dir / "plots" / "spike_raster.png"

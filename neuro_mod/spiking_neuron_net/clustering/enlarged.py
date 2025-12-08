@@ -73,8 +73,8 @@ def generate_clustered_weight_matrix(
     # --- 3. Initiate Full Matrices and Assign Clusters ---
 
     p_matrix = np.zeros((n_neurons, n_neurons), dtype=np.bool)
-    j_matrix = np.zeros((n_neurons, n_neurons))
-    cluster_vec = np.empty(n_neurons, dtype=np.uint32)
+    j_matrix = np.zeros((n_neurons, n_neurons), dtype=np.float64)
+    cluster_vec = np.empty(n_neurons, dtype=np.uint8)
 
     # --- 4. Create Full P and J matrices ---
 

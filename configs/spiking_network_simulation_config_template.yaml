@@ -34,9 +34,13 @@ architecture:
       - 5.0
 
 stimulus:
-  stimulus_shape: diff2exp  # or linear of box
-  onset: 1.0
-  duration: 10.0
+  stimulus_shape: diff2exp  # or linear or box
+  onsets:
+    - 1.
+    - 2.
+    - 3.
+    - 4.
+  duration: 5.0
   amplitude: 0.05
   stimulated_neurons:
   tau_rise: 0.075
