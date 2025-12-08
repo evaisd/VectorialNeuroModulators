@@ -19,7 +19,7 @@ class _StageParent:
             mechanism: str,
             random_seed: int,
             n_neurons: int,
-            n_excitatory: int
+            n_excitatory: int,
     ):
         self.delta_t = delta_t
         self.duration_sec = duration_sec
@@ -41,7 +41,9 @@ class StageSimulation(_StageParent):
             self.clusters_params = config['architecture']['clusters']
             self.stimulus_params = config['stimulus']
             self.external_currents_params = config['external_currents']
+            self.arousal_params = config['arousal']
         self.rng = np.random.default_rng(self.random_seed)
+        self.delta_nu_ext, self.delta_jee = self._get_arousal_mods()
         self.weights, self.clusters = self._get_synaptic_weights()
         self.lif_net = self._get_lif_net()
         self.currents_generator = self._get_external_currents_generator()
@@ -89,6 +91,8 @@ class StageSimulation(_StageParent):
             n_inhibitory_background=self.clusters_params['n_inhibitory_background'],
             types=t
         )
+        _ne = self.n_excitatory
+        weights[:_ne, :_ne] *= (1 - self.delta_jee)
         return weights, clusters
 
     def _get_external_currents_generator(self):
@@ -143,6 +147,7 @@ class StageSimulation(_StageParent):
         stimulus = torch.from_numpy(self._gen_stimulus())
         external_currents = self.currents_generator.generate_external_currents(duration=self.duration_sec,
                                                                                delta_t=self.delta_t,)
+        external_currents += self.delta_nu_ext
         external_currents = torch.from_numpy(external_currents)
 
         # ----- 2. Initial conditions:
@@ -208,3 +213,17 @@ class StageSimulation(_StageParent):
 
         plt_path = self.save_dir / "plots" / "spike_raster.png"
         fig.savefig(plt_path)
+
+    def _get_arousal_mods(self):
+        L = self.arousal_params["L"]
+        k = self.arousal_params["k"]
+        x_0 = self.arousal_params["x_0"]
+        M = self.arousal_params["M"]
+        x = max(1e-6, self.arousal_params["level"])
+        C = np.log2(1 / (1 + ((1 - x_0) / x_0) ** (1/k)))
+
+        denom = 1 + (x ** C - 1) ** k
+        delta_jee = L / denom
+        z = self.rng.beta(10, 10, size=[2, self.n_neurons])
+        delta_nu = M * z / denom
+        return delta_nu, delta_jee

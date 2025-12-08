@@ -28,7 +28,7 @@ architecture:
       - -1.9
       - -3.8
     j_potentiated:
-      - 10.5
+      - 10.75
       - 5.45
       - 6.25
       - 5.0
@@ -42,7 +42,8 @@ stimulus:
     - 4.
   duration: 5.0
   amplitude: 0.05
-  stimulated_neurons:
+  stimulated_clusters_prob: 0.5
+  stimulated_neuron_prob: 0.5
   tau_rise: 0.075
   tau_decay: 0.1
 
@@ -60,7 +61,7 @@ external_currents:
 
 simulation:
   delta_t: 0.001
-  duration_sec: 10.0
+  duration_sec: 5.0
   mechanism: analytic  # or euler
   random_seed: 256
   n_neurons: 2000
@@ -69,3 +70,10 @@ simulation:
 settings:
   save_dir: simulations
   sim_name: sim_name
+
+arousal:
+  level: 0.75  # between [0,1]
+  L: .75
+  x_0: .2
+  k: 1.25
+  M: 13.125
