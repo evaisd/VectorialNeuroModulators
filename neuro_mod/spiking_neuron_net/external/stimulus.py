@@ -103,6 +103,8 @@ class StimulusGenerator:
             raise ValueError("Invalid external shape.")
 
         total_steps = int(total_duration / delta_t)
+        if onsets is None:
+            onsets = []
         onsets_step = [int(onset / delta_t) for onset in onsets]
         duration_step = int(duration / delta_t)
         offsets_step = [onset_step + duration_step for onset_step in onsets_step]

@@ -1,3 +1,8 @@
+init_params:
+  n_neurons: 2000
+  n_excitatory: 1600
+  n_inhibitory: 400
+
 architecture:
   network:
     tau_membrane: 0.02
@@ -6,12 +11,12 @@ architecture:
     threshold:
       - 1.5
       - 0.75
-    reset_voltage: 0.0
+    reset_voltage: 0.
     j_ext:
       - 2.3
       - 2.3
-      - 0.0
-      - 0.0
+      - 0.
+      - 0.
 
   clusters:
     n_excitatory_background: 160
@@ -22,30 +27,20 @@ architecture:
       - 0.5
       - 0.5
       - 0.5
+
     j_baseline:
       - 0.63
       - 0.63
       - -1.9
       - -3.8
+
     j_potentiated:
-      - 10.75
+      - 15.75
       - 5.45
       - 6.25
       - 5.0
 
-stimulus:
-  stimulus_shape: diff2exp  # or linear or box
-  onsets:
-    - 1.
-    - 2.
-    - 3.
-    - 4.
-  duration: 5.0
-  amplitude: 0.05
-  stimulated_clusters_prob: 0.5
-  stimulated_neuron_prob: 0.5
-  tau_rise: 0.075
-  tau_decay: 0.1
+    potentiate: True
 
 external_currents:
   c_ext:
@@ -53,26 +48,22 @@ external_currents:
     - 320
     - 0
     - 0
-  nu_ext_baseline:
-    - 7.0
-    - 7.0
-    - 0.0
-    - 0.0
 
-simulation:
-  delta_t: 0.001
-  duration_sec: 5.0
-  mechanism: analytic  # or euler
-  random_seed: 256
-  n_neurons: 2000
-  n_excitatory: 1600
+  nu_ext_baseline:
+    - 7.
+    - 7.
+    - 0.
+    - 0.
 
 settings:
+  save: False
+  plot: False
   save_dir: simulations
-  sim_name: sim_name
+  sim_name: mf_18
+  random_seed: 256
 
 arousal:
-  level: 0.75  # between [0,1]
+  level: 0.001
   L: .75
   x_0: .2
   k: 1.25

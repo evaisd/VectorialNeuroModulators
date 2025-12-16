@@ -1,0 +1,70 @@
+init_params:
+  n_neurons: 800
+  n_excitatory: 640
+  n_inhibitory: 160
+
+architecture:
+  network:
+    tau_membrane: 0.02
+    tau_synaptic: 0.005
+    tau_refractory: 0.005
+    threshold:
+      - 4.86
+      - 5.98
+    reset_voltage: 0.
+    j_ext:
+      - 14.5
+      - 12.9
+      - 0.
+      - 0.
+
+  clusters:
+    n_excitatory_background: 480
+    n_inhibitory_background: 160
+    n_clusters: 2
+    connectivity_fraction_probs:
+      - 0.2
+      - 0.5
+      - 0.5
+      - 0.5
+
+    j_baseline:
+      - 0.8
+      - 2.5
+      - -10.6
+      - -9.7
+
+    j_potentiated:
+      - 20.
+      - 1.
+      - 1.
+      - 1.
+
+    potentiate: False
+
+external_currents:
+  c_ext:
+    - 128
+    - 128
+    - 0
+    - 0
+
+  nu_ext_baseline:
+    - 7.
+    - 7.
+    - 0.
+    - 0.
+
+settings:
+  save: False
+  plot: False
+  save_dir: simulations
+  sim_name: mf_4
+  random_seed: 256
+
+arousal:
+  level: 0.01
+  L: .75
+  x_0: .2
+  k: 1.25
+  M: 13.125

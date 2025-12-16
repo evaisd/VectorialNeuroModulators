@@ -12,7 +12,8 @@ def setup_matrices(
         n_clusters: int,
         connectivity_fraction_probs: np.ndarray[float] | list[float],
         j_baseline: list[float] | np.ndarray[float],
-        j_potentiated: list[float] | np.ndarray[float]
+        j_potentiated: list[float] | np.ndarray[float],
+        potentiate: bool = True
 ):
     n_inhibitory = n_neurons - n_excitatory
 
@@ -44,11 +45,17 @@ def setup_matrices(
     background_e_idx = n_clusters
     background_i_idx = 2 * n_clusters + 1
 
-    depress_factors = [
-        depress_formula(f_a, f_b, n_clusters, j_potentiated[i])
-        for i, (f_a, f_b) in enumerate(product([fraction_e, fraction_i], repeat=2))
-    ]
+    if potentiate:
 
+        depress_factors = [
+            depress_formula(f_a, f_b, n_clusters, j_potentiated[i])
+            for i, (f_a, f_b) in enumerate(product([fraction_e, fraction_i], repeat=2))
+        ]
+    else:
+        depress_factors = [1.] * 4
+
+    j_baseline = np.asarray(j_baseline)
+    j_baseline = j_baseline / (n_neurons ** .5)
 
     block_shape = [n_clusters, n_clusters]
     iterator = product([e_idx, i_idx], repeat=2)

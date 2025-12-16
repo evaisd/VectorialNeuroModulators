@@ -1,0 +1,51 @@
+init_params:
+  delta_t:
+  duration_sec:
+  mechanism:
+  n_neurons:
+  n_excitatory:
+  n_inhibitory:
+
+architecture:
+  network:
+    tau_membrane:
+    tau_synaptic:
+    tau_refractory:
+    threshold: []
+    reset_voltage:
+    j_ext: []
+
+  clusters:
+    n_excitatory_background:
+    n_inhibitory_background:
+    n_clusters:
+    connectivity_fraction_probs: []
+    j_baseline: []
+    j_potentiated: []
+
+external_currents:
+  c_ext: []
+  nu_ext_baseline: []
+
+stimulus:
+  stimulus_shape:
+  onsets: []
+  amplitude:
+  stimulated_clusters_prob:
+  stimulated_neuron_prob:
+  tau_rise:
+  tau_decay:
+
+settings:
+  save:
+  plot:
+  save_dir:
+  sim_name:
+  random_seed:
+
+arousal:
+  level:
+  L:
+  x_0:
+  k:
+  M:

@@ -37,35 +37,33 @@ class LIFMeanField:
             j_ext: np.ndarray[float],
             c_ext: np.ndarray[int],
             nu_ext: np.ndarray[float],
-            tau_membrane: np.ndarray[float] | list[float],
-            tau_synaptic: np.ndarray[float] | list[float],
+            tau_membrane: np.ndarray[float] | list[float] | float,
+            tau_synaptic: np.ndarray[float] | list[float] | float,
             threshold: float | list[float] | np.ndarray[float],
             reset_voltage: float | list[float] | np.ndarray[float],
             tau_refractory: float = 0.,
             *args,
             **kwargs
     ):
-        self.n_populations = int(n_clusters)
-        self.J_matrix = np.asarray(j_matrix, dtype=float)
-        self.C_matrix = np.asarray(c_matrix, dtype=int)
-        self.C_matrix = self._verify_att_shape(c_matrix,
-                                               (self.n_populations, self.n_populations),
-                                               "C Matrix")
-        self.J_matrix = self._verify_att_shape(j_matrix,
-                                               (self.n_populations, self.n_populations),
-                                               "J Matrix")
-        c_ext = np.asarray(c_ext, dtype=int)
-        j_ext = np.asarray(j_ext, dtype=float)
+        self.n_clusters = int(n_clusters)
+        self.n_populations = j_matrix.shape[0]
+        self.j_mat = np.asarray(j_matrix, dtype=float)
+        self.c_mat = np.asarray(c_matrix, dtype=np.uint16)
+        shape = self.c_mat.shape
+        c_ext = self._gen_ext_arrs(c_ext)
+        j_ext = self._gen_ext_arrs(j_ext)
+        nu_ext = self._gen_ext_arrs(nu_ext)
+
         self.ext_mu = j_ext * c_ext * tau_membrane * nu_ext
         self.ext_sigma = j_ext * j_ext * c_ext * tau_membrane * nu_ext
-        self.tau_m = self._verify_att_shape(tau_membrane, (self.n_populations,), "tau_m")
-        self.tau_s = self._verify_att_shape(tau_synaptic, (self.n_populations,), "tau_s")
-        self.tau_ref = self._verify_att_shape(tau_refractory, (self.n_populations,), "tau_ref")
-        self.threshold = self._verify_att_shape(threshold, (self.n_populations,), "V threshold")
-        self.reset_potential = self._verify_att_shape(reset_voltage, (self.n_populations,), "V reset")
+        self.tau_m = self._verify_att_shape(tau_membrane, shape[0], "tau_m")
+        self.tau_s = self._verify_att_shape(tau_synaptic, shape[0], "tau_s")
+        self.tau_ref = self._verify_att_shape(tau_refractory, shape[0], "tau_ref")
+        self.threshold = self._verify_att_shape(threshold, shape[0], "V threshold")
+        self.reset_potential = self._verify_att_shape(reset_voltage, shape[0], "V reset")
 
-        self.A_mat = self.tau_m * self.C_matrix * self.J_matrix
-        self.B_mat = self.tau_m * self.C_matrix * (self.J_matrix ** 2)
+        self.a_mat = self.tau_m * self.c_mat * self.j_mat
+        self.b_mat = self.tau_m * self.c_mat * (self.j_mat ** 2)
 
         self._dynamic_pops = np.array(range(self.n_populations))
         self._ambient_pops = np.array([])
@@ -87,8 +85,8 @@ class LIFMeanField:
         nu_p[self._dynamic_pops] = nu
         if self._ambient_pops.size > 0:
             nu_p[self._ambient_pops] = self._nu[self._ambient_pops]
-        mu = (self.A_mat @ nu_p + self.ext_mu)[self._dynamic_pops]
-        var = self.B_mat @ nu_p + self.ext_sigma
+        mu = (self.a_mat @ nu_p + self.ext_mu)[self._dynamic_pops]
+        var = self.b_mat @ nu_p + self.ext_sigma
         sigma = np.sqrt(np.maximum(var, 1e-12) / 1.)[self._dynamic_pops]
         return mu, sigma
 
@@ -134,16 +132,6 @@ class LIFMeanField:
             self,
             nu_init: np.ndarray | None = None,
     ):
-        """Find a self-consistent fixed point of the mean-field equations.
-
-        Args:
-            nu_init: Optional initial guess for firing rates. If ``None``,
-                a zero vector is used.
-
-        Returns:
-            `scipy.optimize.OptimizeResult` containing the root-finding
-            solution for the dynamic populations.
-        """
         from scipy.optimize import root
         nu_init = np.zeros(self.n_populations) if nu_init is None else np.asarray(nu_init, float)
         self._nu = nu_init
@@ -263,12 +251,22 @@ class LIFMeanField:
         self._dynamic_pops = np.array(range(self.n_populations))
         self._ambient_pops = np.array([])
 
-    @staticmethod
-    def _verify_att_shape(att, att_shape: tuple[int, ...], name: str):
+    def _verify_att_shape(self, att, att_shape: tuple[int, ...], name: str):
         att = np.asarray(att)
         if att.shape == att_shape:
             return att
         if att.shape == ():
             return att * np.ones(att_shape, dtype=float)
+        if att.shape == np.array(2):
+            new_att = np.zeros(att_shape)
+            new_att[:self.n_clusters + 1] = att[0]
+            new_att[self.n_clusters + 1:] = att[1]
+            return new_att
         else:
             raise ValueError(f"{name} must be scalar or {att_shape}D.")
+
+    def _gen_ext_arrs(self, original: np.ndarray[float] | list[float]) -> np.ndarray:
+        arr = np.zeros(self.n_populations)
+        arr[:self.n_clusters + 1] = original[0]
+        arr[self.n_clusters + 1:] = original[1]
+        return arr
