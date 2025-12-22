@@ -34,13 +34,14 @@ class _BaseSweepRunner(ABC):
                 self._baseline_params = yaml.safe_load(f)
 
     @abstractmethod
-    def _step(self, *args, **kwargs):
+    def _step(self,param, idx, sweep_param, *args, **kwargs):
         pass
 
     def _modify_params(
             self,
             param: list[str],
             param_val,
+            idx: int = None,
     ):
         d = self._baseline_params
         *prefix, last = param
@@ -49,29 +50,37 @@ class _BaseSweepRunner(ABC):
             d = d[key]
 
         if isinstance(param_val, Iterable) and not isinstance(param_val, (str, bytes)):
-            d[last] = param_val
+            pass
         else:
-            d[last] = float(param_val)
+            param_val = float(param_val)
+        if isinstance(d[last], Iterable):
+            d[last][idx] = param_val
+        else:
+            d[last] = param_val
+
 
     def execute(self,
                 main_dir,
                 baseline_params: dict | str,
                 param: str | list[str],
                 sweep_params: list,
-                perturbation: bool = False,
+                param_idx: int = None,
                 *args,
                 **kwargs):
         self.set_dirs(main_dir)
         self._read_baseline_params(baseline_params)
-        if perturbation:
+        perturbation = False
+        if "perturbation" in self._baseline_params.keys():
+            perturbation = True
             self._init_perturbator()
         param = param if isinstance(param, list) else [param]
         results = []
         for i, sweep_param in enumerate(sweep_params):
-            self._modify_params(param, sweep_param)
+            self._modify_params(param, sweep_param, param_idx)
             self._sweep_object = self._stager.from_dict(self._baseline_params)
             if perturbation:
-                self._sweep_object.perturbator = self.perturbator
+                rate_perturbation = self._get_perturbation()
+                kwargs.update({"rate_perturbation": rate_perturbation.T})
             results.append(self._step(param, i, sweep_param, **kwargs))
             config_path = self._dirs['configs'].joinpath(f"{i}.yaml")
             with open(config_path, 'w') as f:
@@ -110,10 +119,7 @@ class _BaseSweepRunner(ABC):
         for i in range(n_trials):
             m_dir = directory.joinpath(f'trial_{i}')
             dirs.append(m_dir)
-            self.execute(m_dir,
-                         baseline_params=baseline_params,
-                         param=param,
-                         sweep_params=sweep_params)
+            self.execute(m_dir, baseline_params=baseline_params, param=param, sweep_params=sweep_params)
         self.summarize_repeated_run(directory, sweep_params)
 
     @abstractmethod
@@ -122,10 +128,29 @@ class _BaseSweepRunner(ABC):
 
     def _init_perturbator(self):
         copied = self._baseline_params['perturbation'].copy()
-        length = self._baseline_params['architecture']['clusters']['total_pops']
+        length = self._baseline_params.get("architecture").get("clusters").get("total_pops")
         vectors = copied.pop('vectors', [])
         params = {
             **copied,
             "length": length,
         }
         self.perturbator = VectorialPerturbation(*vectors, **params)
+
+    def _get_perturbation(self):
+        params = self._baseline_params['perturbation']['params']
+
+        if "time_dependence" in self._baseline_params['perturbation']:
+            import numpy as np
+            t_params = self._baseline_params['perturbation']['time_dependence']
+            dt = self._sweep_object.delta_t
+            n_steps = int(self._sweep_object.duration_sec // dt)
+            time_vec = np.zeros(n_steps)
+            onset = int(t_params['onset_time'] // dt)
+            offset = t_params['offset_time']
+            offset = offset if offset is None else int(offset // dt)
+            slc = slice(onset, offset)
+            time_vec[slc] = 1
+            params = np.outer(params, time_vec)
+            return self.perturbator.get_perturbation(*params)
+
+        return self.perturbator.get_perturbation(*params)

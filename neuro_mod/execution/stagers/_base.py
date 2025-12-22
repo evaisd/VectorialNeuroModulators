@@ -129,3 +129,16 @@ class _Stager(ABC):
             self._save(**to_save)
         if self.settings['plot']:
             self._plot(outputs.get(plot_arg))
+
+    def _project_to_cluster_space(
+            self,
+            original: np.ndarray[float] | list[float],
+            n_populations: int,
+            n_excitatory: int,
+    ) -> np.ndarray:
+        if np.asarray(original).shape == (n_populations,):
+            return original
+        arr = np.zeros(n_populations)
+        arr[:n_excitatory] = original[0]
+        arr[n_excitatory:] = original[1]
+        return arr

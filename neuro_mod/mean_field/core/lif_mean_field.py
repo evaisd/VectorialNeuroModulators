@@ -54,6 +54,7 @@ class LIFMeanField:
         j_ext = self._gen_ext_arrs(j_ext)
         nu_ext = self._gen_ext_arrs(nu_ext)
 
+
         self.ext_mu = j_ext * c_ext * tau_membrane * nu_ext
         self.ext_sigma = j_ext * j_ext * c_ext * tau_membrane * nu_ext
         self.tau_m = self._verify_att_shape(tau_membrane, shape[0], "tau_m")
@@ -266,6 +267,8 @@ class LIFMeanField:
             raise ValueError(f"{name} must be scalar or {att_shape}D.")
 
     def _gen_ext_arrs(self, original: np.ndarray[float] | list[float]) -> np.ndarray:
+        if original.shape == (self.n_populations,):
+            return original
         arr = np.zeros(self.n_populations)
         arr[:self.n_clusters + 1] = original[0]
         arr[self.n_clusters + 1:] = original[1]

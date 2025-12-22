@@ -16,9 +16,9 @@ class _BaseMeanFieldStager(_Stager, ABC):
         self.external_currents_params = self._reader('external_currents')
         self.c_mat = np.zeros_like(self.p_mat)
         self._set_c_matrix()
-        self.lif_mf = self._get_mf_lif()
+        self.lif_mf = self._get_mf_lif(kwargs.get("rate_perturbation", 0.))
 
-    def _get_mf_lif(self):
+    def _get_mf_lif(self, rate_perturbation=0.):
         j_ext = self.network_params['j_ext']
         j_ext = np.asarray(j_ext) / self.n_neurons ** .5
         nu_ext = self.external_currents_params['nu_ext_baseline']
@@ -27,12 +27,20 @@ class _BaseMeanFieldStager(_Stager, ABC):
         delta_nu_ext[0] = delta_nu_ext_full[:self.n_excitatory].mean()
         delta_nu_ext[1] = delta_nu_ext_full[self.n_excitatory:].mean()
         nu_ext += delta_nu_ext
+        arr_params = {
+            "n_populations": self.j_mat.shape[0],
+            "n_excitatory": self.clusters_params['n_clusters'] + 1
+        }
+        j_ext, c_ext, nu_ext = [self._project_to_cluster_space(x, **arr_params)
+                                for x in
+                                (j_ext, self.external_currents_params['c_ext'], nu_ext)]
+        nu_ext += rate_perturbation
         params = {
             "n_clusters": self.clusters_params['n_clusters'],
             'c_matrix': self.c_mat,
             'j_matrix': self.j_mat,
             'j_ext': j_ext,
-            'c_ext': self.external_currents_params['c_ext'],
+            'c_ext': c_ext,
             'nu_ext': nu_ext,
             'tau_membrane': self.network_params['tau_membrane'],
             'tau_synaptic': self.network_params['tau_synaptic'],

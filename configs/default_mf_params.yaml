@@ -22,6 +22,7 @@ architecture:
     n_excitatory_background: 160
     n_inhibitory_background: 40
     n_clusters: 18
+    total_pops: 38
     connectivity_fraction_probs:
       - 0.2
       - 0.5

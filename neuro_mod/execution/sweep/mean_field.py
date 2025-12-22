@@ -16,7 +16,7 @@ class FullMeanFieldBaseSweepRunner(_BaseSweepRunner, ABC):
         self._stager = FullMeanFieldStager
         self._sweep_object: FullMeanFieldStager | None = None
 
-    def _step(self, param: str, sweep_param: float, nu_init, *args, **kwargs):
+    def _step(self, param: str, idx: int, sweep_param: float, *args, **kwargs):
         pass
 
 
