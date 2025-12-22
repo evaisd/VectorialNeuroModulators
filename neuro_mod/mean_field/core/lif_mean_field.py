@@ -54,11 +54,11 @@ class LIFMeanField:
         j_ext = self._gen_ext_arrs(np.asarray(j_ext))
         nu_ext = self._gen_ext_arrs(np.asarray(nu_ext))
 
-        self.tau_m = self._verify_att_shape(tau_membrane, shape[0], "tau_m")
-        self.tau_s = self._verify_att_shape(tau_synaptic, shape[0], "tau_s")
-        self.tau_ref = self._verify_att_shape(tau_refractory, shape[0], "tau_ref")
-        self.threshold = self._verify_att_shape(threshold, shape[0], "V threshold")
-        self.reset_potential = self._verify_att_shape(reset_voltage, shape[0], "V reset")
+        self.tau_m = self._gen_ext_arrs(np.asarray(tau_membrane))
+        self.tau_s = self._gen_ext_arrs(np.asarray(tau_synaptic))
+        self.tau_ref = self._gen_ext_arrs(np.asarray(tau_refractory))
+        self.threshold = self._gen_ext_arrs(np.asarray(threshold))
+        self.reset_potential = self._gen_ext_arrs(np.asarray(reset_voltage))
 
         self.ext_mu = j_ext * c_ext * self.tau_m * nu_ext
         self.ext_sigma = j_ext * j_ext * c_ext * self.tau_m * nu_ext
@@ -190,8 +190,8 @@ class LIFMeanField:
         f0 = np.array(self._fixed_point_residual(nu_star))
         n = len(nu_star)
         J = np.zeros((n, n))
+        pert = np.zeros_like(nu_star)
         for i in range(n):
-            pert = np.zeros_like(nu_star)
             pert[i] = eps
             f1 = np.array(self._fixed_point_residual(nu_star + pert))
             J[:, i] = (f1 - f0) / eps
@@ -253,26 +253,12 @@ class LIFMeanField:
         self._dynamic_pops = np.array(range(self.n_populations))
         self._ambient_pops = np.array([])
 
-    def _verify_att_shape(self, att, att_shape: tuple[int, ...], name: str):
-        if isinstance(att_shape, int):
-            att_shape = (att_shape,)
-        att = np.asarray(att)
-        if att.shape == att_shape:
-            return att
-        if att.shape == ():
-            return att * np.ones(att_shape, dtype=float)
-        if att.shape == (2,):
-            new_att = np.zeros(att_shape, dtype=float)
-            new_att[:self.n_clusters] = att[0]
-            new_att[self.n_clusters:] = att[1]
-            return new_att
-        else:
-            raise ValueError(f"{name} must be scalar or {att_shape}D.")
-
-    def _gen_ext_arrs(self, original: np.ndarray[float] | list[float]) -> np.ndarray:
+    def _gen_ext_arrs(self, original: np.ndarray | list) -> np.ndarray:
         original = np.asarray(original)
         if original.shape == (self.n_populations,):
             return original
+        if original.ndim == 0:
+            return np.repeat(original, self.n_populations)
         arr = np.zeros(self.n_populations)
         arr[:self.n_clusters + 1] = original[0]
         arr[self.n_clusters + 1:] = original[1]

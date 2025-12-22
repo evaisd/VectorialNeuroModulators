@@ -56,13 +56,13 @@ class _BaseMeanFieldStager(_Stager, ABC):
         for (i, j), _ in iterator:
             self.c_mat[i, j] = self.p_mat[i, j] * pops[j]
         to_remove = []
-        for i, row in enumerate(self.c_mat.T):
-            if sum(row) == 0:
-                to_remove.append(i)
-        self.c_mat = np.delete(self.c_mat, to_remove, axis=0)
-        self.c_mat = np.delete(self.c_mat, to_remove, axis=1)
-        self.j_mat = np.delete(self.j_mat, to_remove, axis=0)
-        self.j_mat = np.delete(self.j_mat, to_remove, axis=1)
+        # for i, row in enumerate(self.c_mat.T):
+        #     if sum(row) == 0:
+        #         to_remove.append(i)
+        # self.c_mat = np.delete(self.c_mat, to_remove, axis=0)
+        # self.c_mat = np.delete(self.c_mat, to_remove, axis=1)
+        # self.j_mat = np.delete(self.j_mat, to_remove, axis=0)
+        # self.j_mat = np.delete(self.j_mat, to_remove, axis=1)
 
 
 class FullMeanFieldStager(_BaseMeanFieldStager):
@@ -113,7 +113,7 @@ class FullMeanFieldStager(_BaseMeanFieldStager):
             # choose k[i] random positions without replacement
             if k[i] > 0:
                 idx = self.rng.choice(m, size=k[i], replace=False)
-                arr[i, idx] = self.rng.random(k[i]) * 500
+                arr[i, idx] = self.rng.random(k[i]) * 10
 
         return arr
 

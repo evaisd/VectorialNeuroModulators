@@ -22,7 +22,7 @@ architecture:
     n_excitatory_background: 480
     n_inhibitory_background: 160
     n_clusters: 2
-    total_pops: 4
+    total_pops: 6
     connectivity_fraction_probs:
       - 0.2
       - 0.5
@@ -41,7 +41,7 @@ architecture:
       - 1.
       - 1.
 
-    potentiate: False
+    potentiate: True
 
 external_currents:
   c_ext:
@@ -64,7 +64,7 @@ settings:
   random_seed: 256
 
 arousal:
-  level: 0.01
+  level: 0.001
   L: .75
   x_0: .2
   k: 1.25
