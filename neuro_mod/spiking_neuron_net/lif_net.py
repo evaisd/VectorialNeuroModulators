@@ -39,8 +39,7 @@ class LIFNet(nn.Module):
 
         self.delta_t = delta_t
         self.n_neurons = synaptic_weights.shape[0]
-        self.j_ext = torch.tensor(j_ext, requires_grad=False)
-        self.j_ext = self.j_ext / self.n_neurons ** .5
+        self.register_buffer("j_ext", torch.tensor(j_ext) / self.n_neurons ** 0.5)
         self.register_buffer("tau_synaptic", self._broadcast_param(tau_synaptic))
         self.register_buffer("tau_membrane", self._broadcast_param(tau_membrane))
         self.register_buffer('synaptic_weights', synaptic_weights)

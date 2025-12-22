@@ -90,8 +90,9 @@ class CurrentGenerator:
         self.n_neurons = n_neurons
         if len(c_ext) == 4:
             self.c_ext = self._project_to_cluster_space(c_ext)
+        else:
+            raise ValueError("c_ext must be length 4")
 
-    lru_cache(maxsize=2)
     def _project_to_cluster_space(
             self,
             param: list[float] | list[float] | np.ndarray,
@@ -122,4 +123,3 @@ class CurrentGenerator:
         full_output[0] = np.concatenate(poisson[0], axis=0)
         full_output[1] = np.concatenate(poisson[1], axis=0)
         return full_output
-

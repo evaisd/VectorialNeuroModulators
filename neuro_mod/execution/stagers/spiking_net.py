@@ -92,11 +92,12 @@ class StageSNNSimulation(_Stager):
 
     def _gen_stimulus(self):
         n_clusters = self.clusters_params['n_clusters']
-        stimulated_clusters_prob = self.stimulus_params.pop("stimulated_clusters_prob")
+        stimulus_params = dict(self.stimulus_params)
+        stimulated_clusters_prob = stimulus_params.pop("stimulated_clusters_prob")
         self.stimulated_clusters = self.rng.choice(range(1, n_clusters + 1),
                                                    size=int(n_clusters * stimulated_clusters_prob),
                                                    replace=False)
-        stimulated_neuron_prob = self.stimulus_params.pop("stimulated_neuron_prob")
+        stimulated_neuron_prob = stimulus_params.pop("stimulated_neuron_prob")
         possible_neurons = np.argwhere(np.isin(self.clusters,
                                                self.stimulated_clusters)).flatten()
         stimulated_neurons = self.rng.choice(possible_neurons,
@@ -108,7 +109,7 @@ class StageSNNSimulation(_Stager):
             "delta_t": self.delta_t,
             "stimulated_neurons": stimulated_neurons,
             "duration": self.duration_sec,
-            **self.stimulus_params
+            **stimulus_params
         }
 
         return self.stimulus_generator.generate_stimulus(**params)
@@ -147,12 +148,9 @@ class StageSNNSimulation(_Stager):
                                                 stimulus=stimulus,
                                                 external_currents=external_currents,
                                                 mechanism=self.mechanism)
-        voltage = voltage.detach().cpu().numpy()
-        voltage = np.astype(voltage, np.float64)
-        current = current.detach().cpu().numpy()
-        current = np.astype(current, np.float64)
-        spikes = spikes.detach().cpu().numpy()
-        spikes = np.astype(spikes, np.bool)
+        voltage = voltage.detach().cpu().numpy().astype(np.float64)
+        current = current.detach().cpu().numpy().astype(np.float64)
+        spikes = spikes.detach().cpu().numpy().astype(bool)
 
         outputs = {
             "voltage": voltage,

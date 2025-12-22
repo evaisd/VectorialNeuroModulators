@@ -86,8 +86,8 @@ def setup_matrices(
     types = {}
     types['E'] = (0, n_excitatory - n_excitatory_background)
     types['Eb'] = (n_excitatory - n_excitatory_background, n_excitatory)
-    types['I'] = (n_excitatory, n_neurons - n_excitatory_background)
-    types['Ib'] = (n_neurons - n_excitatory_background, n_neurons)
+    types['I'] = (n_excitatory, n_neurons - n_inhibitory_background)
+    types['Ib'] = (n_neurons - n_inhibitory_background, n_neurons)
     return c_mat, j_mat.T, boundaries, types
 
 
@@ -111,4 +111,3 @@ def _gen_block(
     jmat += depress_factor * baseline
     np.fill_diagonal(jmat, potentiated * baseline)
     return jmat
-

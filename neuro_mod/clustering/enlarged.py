@@ -72,7 +72,7 @@ def generate_clustered_weight_matrix(
 
     # --- 3. Initiate Full Matrices and Assign Clusters ---
 
-    p_matrix = np.zeros((n_neurons, n_neurons), dtype=np.bool)
+    p_matrix = np.zeros((n_neurons, n_neurons), dtype=bool)
     j_matrix = np.zeros((n_neurons, n_neurons), dtype=np.float64)
     cluster_vec = np.empty(n_neurons, dtype=np.uint8)
 
@@ -98,7 +98,6 @@ def generate_clustered_weight_matrix(
 def _generate_equirowsum_matrix(n, m, p, rng: np.random.Generator):
     k = int(p * m)
     base = np.zeros(m, dtype=np.uint8)
-    base[:k] = 1
     base[:k] = 1
     mat = np.tile(base, (n, 1))
     keys = rng.random([n, m])
