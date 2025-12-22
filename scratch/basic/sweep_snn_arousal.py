@@ -23,7 +23,7 @@ class ArousalSweepRunner(SNNBaseSweepRunner):
         return e_cluster_active_rates, e_cluster_non_active_rates
 
     def _store(self, *args, **kwargs):
-        param, arousal_level = args
+        param, idx, arousal_level = args
         param_name = '_'.join(param)
         data_file = self._dirs['data'].joinpath(f"{param_name}_{arousal_level:.2f}.npz")
 
@@ -77,7 +77,7 @@ class ArousalSweepRunner(SNNBaseSweepRunner):
 
     def _summary_plot(self, *args, **kwargs):
         fig, ax = plt.subplots(figsize=(16, 8))
-        sweep_params, results = args
+        results, sweep_params = args
         ax.plot(sweep_params, results[0], 'o--', label="Active")
         ax.plot(sweep_params, results[1], 'o--', label="Non-Active")
         ax.legend()
@@ -86,14 +86,14 @@ class ArousalSweepRunner(SNNBaseSweepRunner):
         fig.savefig(self._dirs['plots'].joinpath(f"active_vs_non_active.png"))
         plt.close(fig)
 
-    def _summarize_repeated_run(self, *args, **kwargs):
+    def summarize_repeated_run(self, *args, **kwargs):
         pass
 
 
 def main():
-    config = 'configs/18_clusters_snn.yaml'
+    config = 'configs/default_snn_params.yaml'
     arousal_params = np.linspace(1e-6, 1., 30)
-    wd = Path().cwd().parent
+    wd = Path(next(p for p in Path().resolve().parents if p.name == 'VectorialNeuroModulators'))
     os.chdir(wd)
     runner = ArousalSweepRunner()
     runner.execute('simulations/sweep_arousal_snn/test',

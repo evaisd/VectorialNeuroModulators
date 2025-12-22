@@ -24,6 +24,7 @@ architecture:
     j_potentiated: []
 
 external_currents:
+
   c_ext: []
   nu_ext_baseline: []
 

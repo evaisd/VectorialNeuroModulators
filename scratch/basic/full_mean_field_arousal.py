@@ -54,14 +54,14 @@ class ArousalSweepRunner(FullMeanFieldBaseSweepRunner):
                  active_rates=results[0],
                  non_active_rates=results[1],)
 
-    def _summarize_repeated_run(self, *args, **kwargs):
+    def summarize_repeated_run(self, *args, **kwargs):
         pass
 
 
 def main():
-    config = 'configs/18_cluster_mf.yaml'
+    config = 'configs/default_mf_params.yaml'
     arousal_params = np.linspace(1e-6, 1., 30)
-    wd = Path().cwd().parent
+    wd = Path(next(p for p in Path().resolve().parents if p.name == 'VectorialNeuroModulators'))
     os.chdir(wd)
     runner = ArousalSweepRunner()
     runner.set_dirs('simulations/sweep_arousal_mf')

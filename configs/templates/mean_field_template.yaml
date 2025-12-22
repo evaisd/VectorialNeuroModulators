@@ -16,10 +16,10 @@ architecture:
     n_excitatory_background:
     n_inhibitory_background:
     n_clusters:
-    total_pops:
     connectivity_fraction_probs: []
     j_baseline: []
     j_potentiated: []
+    potentiate:
 
 external_currents:
 

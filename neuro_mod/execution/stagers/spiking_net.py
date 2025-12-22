@@ -8,22 +8,25 @@ from neuro_mod.execution.stagers._base import _Stager
 from neuro_mod import clustering
 from neuro_mod.spiking_neuron_net import external
 from neuro_mod.spiking_neuron_net.lif_net import LIFNet
+from neuro_mod.spiking_neuron_net.external import CurrentGenerator
+
+
+DEFAULT_PARAMS = '../../../configs/default_snn_params.yaml'
 
 
 class StageSNNSimulation(_Stager):
 
     def __init__(self,
-                 config: Path | str | bytes,
+                 config: Path | str | bytes = DEFAULT_PARAMS,
                  random_seed: int = None,
                  **kwargs):
         super().__init__(config, random_seed, **kwargs)
         self.stimulus_params = self._reader('stimulus')
         self.external_currents_params = self._reader('external_currents')
         self.weights, self.clusters = self._get_synaptic_weights()
-        self.lif_net = self._get_lif_net()
-        self.currents_generator = self._get_external_currents_generator()
         self.stimulus_generator = self._get_stimulus_generator()
         self.stimulated_clusters = None
+        self.current_generator = self._get_currents_generator()
 
     def _get_lif_net(self) -> LIFNet:
         net_params = self.network_params
@@ -42,6 +45,7 @@ class StageSNNSimulation(_Stager):
         params = {
             "synaptic_weights": torch.from_numpy(self.weights),
             "delta_t": self.delta_t,
+            "currents_generator": self.current_generator,
             **net_params
         }
         return LIFNet(**params)
@@ -59,16 +63,28 @@ class StageSNNSimulation(_Stager):
         )
         return weights, clusters
 
-    def _get_external_currents_generator(self):
-        delta_nu_ext = self._get_arousal_nu()
+    def _get_currents_generator(self):
+
         params = {
+            "rng": self.rng,
+            "delta_t": self.delta_t,
+            "cluster_vec": self.cluster_vec,
+            "n_e_clusters":  self.n_excitatory,
             "n_neurons": self.n_neurons,
-            "n_excitatory": self.n_excitatory,
-            "random_generator": self.rng,
-            "delta_nu_ext": delta_nu_ext,
-            **self.external_currents_params
+            "c_ext": self.external_currents_params["c_ext"],
         }
-        return external.ExternalCurrentsGenerator(**params)
+        return CurrentGenerator(**params)
+
+    def _generate_currents(self, perturbation: list[float] | np.ndarray[float] = None):
+        delta_nu_ext = self._get_arousal_nu()
+        baseline_rates = np.array(self.external_currents_params["nu_ext_baseline"], dtype=np.float64)
+        return torch.from_numpy(
+            self.current_generator.generate_currents(
+                baseline_rates=baseline_rates,
+                n_perturbations=delta_nu_ext,
+                c_perturbations=perturbation
+            )
+        )
 
     @staticmethod
     def _get_stimulus_generator():
@@ -116,15 +132,17 @@ class StageSNNSimulation(_Stager):
         fig.savefig(plt_path)
 
     def run(self, *args, **kwargs):
+        self.duration_sec = kwargs.get("duration_sec", self.duration_sec)
+        self.delta_t = kwargs.get("delta_t", self.delta_t)
         stimulus = torch.from_numpy(self._gen_stimulus())
-        external_currents = self.currents_generator.generate_external_currents(duration=self.duration_sec,
-                                                                               delta_t=self.delta_t,)
-        external_currents = torch.from_numpy(external_currents)
-
+        lif_net = self._get_lif_net()
+        perturbation_shape = (stimulus.shape[0], len(np.unique(self.clusters)))
+        rate_perturbation = kwargs.get('rate_perturbation', np.zeros(perturbation_shape))
+        external_currents = (self._generate_currents(c) for c in rate_perturbation)
         voltage = torch.zeros(self.n_neurons, dtype=torch.float64)
         current = torch.zeros(self.n_neurons, dtype=torch.float64)
 
-        voltage, current, spikes = self.lif_net(voltage=voltage,
+        voltage, current, spikes = lif_net(voltage=voltage,
                                                 synaptic_current=current,
                                                 stimulus=stimulus,
                                                 external_currents=external_currents,

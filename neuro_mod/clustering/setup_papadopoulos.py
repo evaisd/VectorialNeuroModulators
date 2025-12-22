@@ -13,7 +13,9 @@ def setup_matrices(
         connectivity_fraction_probs: np.ndarray[float] | list[float],
         j_baseline: list[float] | np.ndarray[float],
         j_potentiated: list[float] | np.ndarray[float],
-        potentiate: bool = True
+        potentiate: bool = True,
+        *args,
+        **kwargs
 ):
     n_inhibitory = n_neurons - n_excitatory
 

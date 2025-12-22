@@ -1,51 +1,125 @@
 
+from functools import lru_cache
 import numpy as np
 
 
-class ExternalCurrentsGenerator:
+def generate_external_currents(
+        nu_ext_baseline: list[float] | list[float] | np.ndarray,
+        c_ext: np.ndarray[int] | list[int] | np.ndarray,
+        duration: float,
+        delta_t: float,
+        cluster_vec: list[int] | np.ndarray[int],
+        n_e_clusters: int ,
+        cluster_based_perturbations: list[float] | np.ndarray[float] = None,
+        neuron_based_perturbations: list[float] | np.ndarray[float] = None,
+        rng: np.random.Generator = None,
+        *args,
+        **kwargs
+):
+    total_steps = int(duration / delta_t)
+    full_output = np.zeros((4, total_steps, cluster_vec[-1]))
+    projected_nu = _project_to_cluster_space(len(cluster_vec) - 1,
+                                             n_e_clusters,
+                                             nu_ext_baseline)
+    projected_c = _project_to_cluster_space(len(cluster_vec) - 1,
+                                            n_e_clusters,
+                                            c_ext)
+    poisson = [[], []]
+    if cluster_based_perturbations is None:
+        cluster_based_perturbations = np.zeros(len(cluster_vec) - 1)
+    if neuron_based_perturbations is None:
+        neuron_based_perturbations = np.zeros(cluster_vec[-1])
 
-    def __init__(self,
-                 n_neurons: int,
-                 n_excitatory: int,
-                 c_ext: np.ndarray[int] | list[int],
-                 nu_ext_baseline: list[float] | list[float],
-                 random_generator: np.random.Generator = None,
-                 delta_nu_ext: list[float] | np.ndarray[float] = None,
-                 ):
-        self.c_ext = c_ext
-        self.nu_ext_baseline = nu_ext_baseline
-        self.total_neurons = n_neurons
-        self.excitatory_neurons = n_excitatory
-        self.inhibitory_neurons = self.total_neurons - n_excitatory
-        self.rng = np.random.default_rng(256) if random_generator is None else random_generator
-        self.delta_nu_ext = delta_nu_ext
+
+    for i in range(2):
+        iterator = zip(cluster_vec[:-1], cluster_vec[1:],
+                       cluster_based_perturbations)
+        for j, (left, right, p) in enumerate(iterator):
+            num_neurons_to = right - left
+            base_rate = projected_nu[i, j]
+            c = projected_c[i, j]
+            delta_nu = neuron_based_perturbations[left:right]
+            rate = (base_rate + delta_nu + p) * c * delta_t
+            size = (total_steps, num_neurons_to)
+            poisson[i].append(_gen_poisson(rate, size, rng))
+    full_output[0] = np.concatenate(poisson[0], axis=1)
+    full_output[1] = np.concatenate(poisson[1], axis=1)
+    return full_output.swapaxes(0, 1)
+
+
+def _gen_poisson(rate, size, rng=None):
+    if rng is None:
+        rng = np.random.default_rng(256)
+    rate = np.maximum(rate, 0.)
+    return rng.poisson(rate, size)
+
+
+def _project_to_cluster_space(
+        n_clusters: int,
+        n_e_clusters: int,
+        param: list[float | int] | list[float | int],
+):
+    if len(param) == 1:
+        param = param * 2 + [0, 0]
+    projected = np.zeros((2, n_clusters))
+
+    projected[0, :n_e_clusters] = param[0]
+    projected[1, :n_e_clusters] = param[2]
+    projected[0, n_e_clusters:] = param[1]
+    projected[1, n_e_clusters:] = param[3]
+    return projected
+
+
+class CurrentGenerator:
+
+    def __init__(
+            self,
+            rng: np.random.Generator,
+            delta_t: float,
+            cluster_vec: list[int] | np.ndarray[int],
+            n_e_clusters: int,
+            n_neurons: int,
+            c_ext: np.ndarray[int] | list[int],
+    ):
+        self.rng = rng
+        self.delta_t = delta_t
+        self.sizes = np.diff(cluster_vec)
+        self.n_clusters = len(self.sizes)
+        self.cluster_vec = cluster_vec
+        self.n_e_clusters = n_e_clusters
+        self.n_neurons = n_neurons
+        if len(c_ext) == 4:
+            self.c_ext = self._project_to_cluster_space(c_ext)
+
+    lru_cache(maxsize=2)
+    def _project_to_cluster_space(
+            self,
+            param: list[float] | list[float] | np.ndarray,
+    ):
+        return _project_to_cluster_space(self.n_clusters, self.n_e_clusters, param)
 
     def _gen(self, rate, size):
-        return self.rng.poisson(rate, size)
+        return _gen_poisson(rate, size, rng=self.rng)
 
-    def generate_external_currents(self,
-                                   duration: float,
-                                   delta_t: float,):
-        total_steps = int(duration / delta_t)
-        full_output = np.zeros((4, total_steps, self.total_neurons))
-        poisson_e = []
-        poisson_i = []
-        for i, (nu, c) in enumerate(zip(self.nu_ext_baseline, self.c_ext)):
-            from_excitatory = i < 2
-            to_excitatory = i % 2 == 0
-            base_rate = nu
-            num_neurons_to = self.excitatory_neurons if i % 2 == 0 else self.inhibitory_neurons
-            if to_excitatory:
-                delta_rate = self.delta_nu_ext[:self.excitatory_neurons]
-            else:
-                delta_rate = self.delta_nu_ext[self.excitatory_neurons:]
-            rate = (base_rate + delta_rate) * c * delta_t
-            size = (total_steps, num_neurons_to)
-            if from_excitatory:
-                poisson_e.append(self._gen(rate, size))
-            else:
-                poisson_i.append(self._gen(rate, size))
-        full_output[0] = np.concatenate(poisson_e, axis=1)
-        full_output[1] = np.concatenate(poisson_i, axis=1)
+    def generate_currents(
+            self,
+            baseline_rates: list[float] | np.ndarray[float],  # (4,)
+            c_perturbations: list[float] | np.ndarray[float] = None,  # (C, T)
+            n_perturbations: list[float] | np.ndarray[float] = None   # (T,)
+    ):
+        baseline_rates = self._project_to_cluster_space(baseline_rates)
+        c_perturbations = np.zeros((self.n_clusters, 1)) if c_perturbations is None else c_perturbations
+        n_perturbations = np.zeros(self.n_neurons) if n_perturbations is None else n_perturbations
+        full_output = np.zeros((4, self.n_neurons, ))
+        poisson = [[], []]
+        for i in range(2): # EE, EI
+            for j, size in enumerate(self.sizes):  # clusters
+                baseline_rate = baseline_rates[i, j]
+                perturbation = (c_perturbations[j] +
+                                n_perturbations[self.cluster_vec[j]:self.cluster_vec[j + 1]])
+                rate = (baseline_rate + perturbation) * self.delta_t * self.c_ext[i, j]
+                poisson[i].append(_gen_poisson(rate.flatten(), size, self.rng))
+        full_output[0] = np.concatenate(poisson[0], axis=0)
+        full_output[1] = np.concatenate(poisson[1], axis=0)
+        return full_output
 
-        return full_output.swapaxes(0, 1)

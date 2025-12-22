@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-from sweep_snn_arousal import ArousalSweepRunner
+from scratch.basic.sweep_snn_arousal import ArousalSweepRunner
 from neuro_mod.spiking_neuron_net.analysis.activity import get_average_cluster_firing_rate
 
 
@@ -35,9 +35,9 @@ class ArousalRepeatedSweepRunner(ArousalSweepRunner):
     def _summary_plot(self, *args, **kwargs):
         pass
 
-    def _summarize_repeated_run(self, *args, **kwargs):
+    def summarize_repeated_run(self, *args, **kwargs):
         directory, sweep_params = args
-        trials = self._dirs['main'].glob('*')
+        trials = directory.glob('trial_*')
         all_spikes = []
         for trial in trials:
             file = trial.joinpath('data', 'summary_results.npz')
@@ -45,11 +45,11 @@ class ArousalRepeatedSweepRunner(ArousalSweepRunner):
         all_spikes = np.concat(all_spikes, axis=-1)[:18]
         average_cluster_rates = np.mean(all_spikes, axis=-1)
         active = all_spikes > average_cluster_rates[..., None]
-        masked_sum = np.sum(np.where(active, all_spikes, 0.0), axis=(1, 2))
-        masked_count = np.sum(active, axis=(1, 2))
+        masked_sum = np.sum(np.where(active, all_spikes, 0.0), axis=(0, 2))
+        masked_count = np.sum(active, axis=(0, 2))
         means_active = masked_sum / masked_count
-        masked_sum = np.sum(np.where(~active, all_spikes, 0.0), axis=(1, 2))
-        masked_count = np.sum(active, axis=(1, 2))
+        masked_sum = np.sum(np.where(~active, all_spikes, 0.0), axis=(0, 2))
+        masked_count = np.sum(active, axis=(0, 2))
         means_non_active = masked_sum / masked_count
         file = directory.joinpath('summary_results.npz')
         np.savez(file,
@@ -65,13 +65,15 @@ class ArousalRepeatedSweepRunner(ArousalSweepRunner):
         plt.close(fig)
 
 def main():
-    config = 'configs/18_clusters_snn.yaml'
+    config = 'configs/default_snn_params.yaml'
     arousal_params = np.linspace(1e-6, 1., 30)
-    wd = Path().cwd().parent
+    wd = Path(next(p for p in Path().resolve().parents if p.name == 'VectorialNeuroModulators'))
     os.chdir(wd)
+    directory = Path('simulations/sweep_arousal_snn/repeat_test')
     runner = ArousalRepeatedSweepRunner()
+    # runner.summarize_repeated_run(directory, arousal_params)
     runner.repeat('simulations/sweep_arousal_snn/repeat_test',
-                  n_trials=30,
+                  n_trials=3,
                   baseline_params=config,
                    param=['arousal', 'level'],
                    sweep_params=arousal_params)

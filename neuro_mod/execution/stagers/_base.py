@@ -39,7 +39,8 @@ class _Stager(ABC):
 
         for key, value in self._reader('init_params').items():
             setattr(self, key, value)
-        self._setup_clustered_matrices(**kwargs)
+        j_perturbation = kwargs.pop('j_perturbation', None)
+        self._setup_clustered_matrices(j_perturbation=j_perturbation)
 
     @classmethod
     def from_dict(cls, params: dict):
@@ -80,7 +81,8 @@ class _Stager(ABC):
         }
         p, j, b, t = setup_matrices(**params)
         self.p_mat = p
-        j_perturbation = kwargs.get('j_perturbation', np.ones_like(j))
+        j_perturbation = kwargs['j_perturbation']
+        j_perturbation = np.ones_like(j) if j_perturbation is None else j_perturbation
         self.j_mat = j * j_perturbation
         self.cluster_vec = b
         self.types = t
@@ -120,10 +122,10 @@ class _Stager(ABC):
                 plot_arg: str,
                 save_outputs: list[str] = None,
                 *args, **kwargs):
-        outputs = self.run()
+        outputs = self.run(*args, **kwargs)
         if self.settings['save']:
             save_outputs = save_outputs if save_outputs is not None else outputs.keys()
             to_save = {k: outputs[k] for k in save_outputs if k in outputs}
             self._save(**to_save)
         if self.settings['plot']:
-            self._plot(outputs[plot_arg])
+            self._plot(outputs.get(plot_arg))

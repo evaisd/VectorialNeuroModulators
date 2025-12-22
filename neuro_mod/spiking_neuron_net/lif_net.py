@@ -33,6 +33,7 @@ class LIFNet(nn.Module):
             threshold: float | list[float] | torch.Tensor,
             reset_voltage: float | list[float] | torch.Tensor = 0.,
             delta_t: float = 1e-3,
+            currents_generator = None
     ):
         super().__init__()
 
@@ -46,7 +47,6 @@ class LIFNet(nn.Module):
         self.register_buffer('threshold', self._broadcast_param(threshold))
         self.register_buffer('reset_voltage', self._broadcast_param(reset_voltage))
         self.register_buffer("tau_ref_vec", self._broadcast_param(tau_refractory))
-
         self.register_buffer('spikes_timer', torch.zeros(self.n_neurons,))
         self.register_buffer('propagators', self._get_propagators())
 
@@ -110,34 +110,15 @@ class LIFNet(nn.Module):
             external_currents: torch.Tensor | None = None,
             mechanism: str | None = None,
     ):
-        """Simulate network dynamics over time.
-
-        Args:
-            voltage: Initial membrane voltages, shape `(n_neurons,)`.
-            synaptic_current: Initial synaptic currents, shape `(n_neurons,)`.
-            stimulus: Time series of stimulus currents, shape
-                `(T, n_neurons)`.
-            external_currents: Optional time series of external input, same
-                shape as `stimulus`. If ``None``, zeros are used.
-            mechanism: Integration mechanism, either ``"analytic"`` or
-                ``"euler"``. Defaults to analytic.
-
-        Returns:
-            Tuple `(v_hist, c_hist, s_hist)` where:
-
-            * `v_hist`: Membrane voltages over time.
-            * `c_hist`: Synaptic currents over time.
-            * `s_hist`: Binary spike indicators over time.
-        """
         if external_currents is None:
             external_currents = torch.zeros_like(stimulus)
 
         v_history, c_history, s_history = [], [], []
-        for t in range(stimulus.shape[0]):
+        for stim, c in zip(stimulus, external_currents):
             voltage, synaptic_current, s = self._step(voltage,
                                                       synaptic_current,
-                                                      stimulus[t],
-                                                      external_currents[t],
+                                                      stim,
+                                                      c,
                                                       mechanism)
             v_history.append(voltage.clone())
             c_history.append(synaptic_current.clone())

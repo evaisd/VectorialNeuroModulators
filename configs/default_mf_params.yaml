@@ -56,10 +56,10 @@ external_currents:
     - 0.
 
 settings:
-  save: False
-  plot: False
+  save: True
+  plot: True
   save_dir: simulations
-  sim_name: mf_18
+  sim_name: mf_18_circulant
   random_seed: 256
 
 arousal:

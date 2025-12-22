@@ -1,3 +1,3 @@
 
-from neuro_mod.spiking_neuron_net.external.currents import ExternalCurrentsGenerator
+from neuro_mod.spiking_neuron_net.external.currents import generate_external_currents, CurrentGenerator
 from neuro_mod.spiking_neuron_net.external.stimulus import StimulusGenerator
