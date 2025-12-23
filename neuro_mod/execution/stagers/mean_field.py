@@ -120,7 +120,7 @@ class ReducedMeanFieldStager(_BaseMeanFieldStager):
             *args,
             **kwargs
     ):
-        from neuro_mod.mean_field.auxiliary import visualization as viz
+        from neuro_mod.mean_field.analysis import visualization as viz
         return viz.gen_potential_plot(grid, force_field, path)
 
     def __init__(self,
@@ -133,7 +133,7 @@ class ReducedMeanFieldStager(_BaseMeanFieldStager):
             focus_pops: list[int],
             grid_density: float = .5,
             grid_lims: tuple[float, float] | list[tuple[float, float]] = (0., 60.),):
-        from neuro_mod.mean_field.auxiliary import integration as ing
+        from neuro_mod.mean_field.analysis import integration as ing
         nu_vecs = self._gen_grid_vecs(focus_pops, grid_density, grid_lims)
         mesh, nu_outs = self._get_effective_rates_on_grid(focus_pops, *nu_vecs)
         shape = (mesh.shape[0], mesh.shape[1], mesh.shape[-1])

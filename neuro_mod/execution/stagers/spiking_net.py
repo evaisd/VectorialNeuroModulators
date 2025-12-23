@@ -1,5 +1,4 @@
 
-import yaml
 from pathlib import Path
 import numpy as np
 import torch
@@ -16,6 +15,8 @@ DEFAULT_PARAMS = '../../../configs/default_snn_params.yaml'
 
 class StageSNNSimulation(_Stager):
 
+    stimulated_clusters: np.ndarray | list
+
     def __init__(self,
                  config: Path | str | bytes = DEFAULT_PARAMS,
                  random_seed: int = None,
@@ -25,7 +26,6 @@ class StageSNNSimulation(_Stager):
         self.external_currents_params = self._reader('external_currents')
         self.weights, self.clusters = self._get_synaptic_weights()
         self.stimulus_generator = self._get_stimulus_generator()
-        self.stimulated_clusters = None
         self.current_generator = self._get_currents_generator()
 
     def _get_lif_net(self) -> LIFNet:

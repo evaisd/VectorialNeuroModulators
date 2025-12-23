@@ -11,6 +11,17 @@ from neuro_mod.clustering import setup_matrices
 
 class _Stager(ABC):
 
+    n_neurons: int
+    n_excitatory: int
+    n_inhibitory: int
+    duration_sec: float
+    delta_t: float
+    mechanism: str
+    p_mat: np.ndarray
+    j_mat: np.ndarray
+    cluster_vec: np.ndarray
+    types: dict
+
     def __init__(
             self,
             config: Path | str | bytes,
@@ -31,11 +42,6 @@ class _Stager(ABC):
         self.clusters_params = self._reader('architecture', 'clusters')
         self.arousal_params = self._reader('arousal')
         self.arousal_denom = self._get_arousal_denom()
-
-        self.p_mat = None
-        self.j_mat = None
-        self.cluster_vec = None
-        self.types = None
 
         for key, value in self._reader('init_params').items():
             setattr(self, key, value)
@@ -130,8 +136,8 @@ class _Stager(ABC):
         if self.settings['plot']:
             self._plot(outputs.get(plot_arg))
 
+    @staticmethod
     def _project_to_cluster_space(
-            self,
             original: np.ndarray[float] | list[float],
             n_populations: int,
             n_excitatory: int,

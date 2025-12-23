@@ -1,5 +1,7 @@
 
 import numpy as np
+from neuro_mod.mean_field.core import logic
+from neuro_mod.mean_field import helpers
 
 
 class LIFMeanField:
@@ -29,18 +31,29 @@ class LIFMeanField:
         **kwargs: Additional keyword arguments (ignored, for compatibility).
     """
 
+    j_mat: np.ndarray | list
+    c_mat: np.ndarray | list
+    j_ext: np.ndarray | list
+    c_ext: np.ndarray | list
+    nu_ext: np.ndarray | list
+    tau_m: np.ndarray | list
+    tau_s: np.ndarray | list
+    tau_ref: np.ndarray | list
+    reset_potential: float | list
+    threshold: float | list | np.ndarray
+
     def __init__(
             self,
             n_clusters: int,
-            c_matrix: np.ndarray[np.ndarray[int]],
-            j_matrix: np.ndarray[np.ndarray[float]],
-            j_ext: np.ndarray[float],
-            c_ext: np.ndarray[int],
-            nu_ext: np.ndarray[float],
-            tau_membrane: np.ndarray[float] | list[float] | float,
-            tau_synaptic: np.ndarray[float] | list[float] | float,
-            threshold: float | list[float] | np.ndarray[float],
-            reset_voltage: float | list[float] | np.ndarray[float],
+            c_matrix: np.ndarray,
+            j_matrix: np.ndarray,
+            j_ext: np.ndarray,
+            c_ext: np.ndarray,
+            nu_ext: np.ndarray,
+            tau_membrane: np.ndarray | list | float,
+            tau_synaptic: np.ndarray | list[float] | float,
+            threshold: float | list | np.ndarray,
+            reset_voltage: float | list | np.ndarray,
             tau_refractory: float = 0.,
             *args,
             **kwargs
@@ -49,18 +62,28 @@ class LIFMeanField:
         self.n_populations = j_matrix.shape[0]
         self.j_mat = np.asarray(j_matrix, dtype=float)
         self.c_mat = np.asarray(c_matrix, dtype=np.uint16)
-        c_ext = self._gen_ext_arrs(np.asarray(c_ext))
-        j_ext = self._gen_ext_arrs(np.asarray(j_ext))
-        nu_ext = self._gen_ext_arrs(np.asarray(nu_ext))
 
-        self.tau_m = self._gen_ext_arrs(np.asarray(tau_membrane))
-        self.tau_s = self._gen_ext_arrs(np.asarray(tau_synaptic))
-        self.tau_ref = self._gen_ext_arrs(np.asarray(tau_refractory))
-        self.threshold = self._gen_ext_arrs(np.asarray(threshold))
-        self.reset_potential = self._gen_ext_arrs(np.asarray(reset_voltage))
+        _project_vars = {
+            "tau_m": tau_membrane,
+            "tau_s": tau_synaptic,
+            "tau_ref": tau_refractory,
+            "threshold": threshold,
+            "reset_potential": reset_voltage,
+            "c_ext": c_ext,
+            "j_ext": j_ext,
+            "nu_ext": nu_ext,
+        }
 
-        self.ext_mu = j_ext * c_ext * self.tau_m * nu_ext
-        self.ext_sigma = j_ext * j_ext * c_ext * self.tau_m * nu_ext
+        for key, value in _project_vars.items():
+            value = helpers.gen_ext_arrays(
+                value,
+                self.n_populations,
+                self.n_clusters
+            )
+            setattr(self, key, value)
+
+        self.ext_mu = self.j_ext * self.c_ext * self.tau_m * self.nu_ext
+        self.ext_sigma = self.j_ext * self.j_ext * self.c_ext * self.tau_m * self.nu_ext
         self.a_mat = self.tau_m * self.c_mat * self.j_mat
         self.b_mat = self.tau_m * self.c_mat * (self.j_mat ** 2)
 
@@ -84,22 +107,21 @@ class LIFMeanField:
         nu_p[self._dynamic_pops] = nu
         if self._ambient_pops.size > 0:
             nu_p[self._ambient_pops] = self._nu[self._ambient_pops]
-        mu = (self.a_mat @ nu_p + self.ext_mu)[self._dynamic_pops]
+        mu = (self.a_mat @ nu_p + self.ext_mu)
         var = self.b_mat @ nu_p + self.ext_sigma
-        sigma = np.sqrt(np.maximum(var, 1e-12) / 1.)[self._dynamic_pops]
-        return mu, sigma
+        sigma = np.sqrt(np.maximum(var, 1e-12) / 1.)
+        return mu[self._dynamic_pops], sigma[self._dynamic_pops]
 
     def response_function(
             self,
             mu: np.ndarray,
-            sigma: np.ndarray,
-            **params) -> np.ndarray:
+            sigma: np.ndarray
+    ) -> np.ndarray:
         """Compute firing rates from input statistics using the LIF transfer.
 
         Args:
             mu: Mean input currents for each population.
             sigma: Standard deviation of input currents for each population.
-            **params: Additional keyword arguments (currently unused).
 
         Returns:
             Array of firing rates for each population.
@@ -111,7 +133,7 @@ class LIFMeanField:
         sigma = np.maximum(np.asarray(sigma, float), 1e-12)
         rates = np.empty_like(mu, float)
 
-        b_s = self._brunel_sergei()
+        b_s = logic.brunei_sergei(tau_m=self.tau_m, tau_s=self.tau_s)
         for i in range(mu.size):
             tau_m = self.tau_m[self._dynamic_pops][i]
             alpha = (self.threshold[self._dynamic_pops][i] - mu[i]) / sigma[i]
@@ -119,8 +141,7 @@ class LIFMeanField:
             beta = (self.reset_potential[self._dynamic_pops][i] - mu[i]) / sigma[i]
             beta += b_s[i]
 
-            # integrate from β (reset) to α (threshold)
-            val, _ = integrate.quad(self._integrand, beta, alpha,
+            val, _ = integrate.quad(logic.integrand, beta, alpha,
                                     epsabs=1e-12, epsrel=1e-12)
             denom = self.tau_ref[i] + tau_m * val
             rates[i] = 1.0 / max(denom, 1e-12)
@@ -145,56 +166,7 @@ class LIFMeanField:
         return sol
 
     def determine_stability(self, nu_star: np.ndarray):
-        """Classify the linear stability of a fixed point.
-
-        Args:
-            nu_star: Fixed-point firing rates for all populations.
-
-        Returns:
-            Tuple `(fp_type, eigvals)` where:
-
-            * `fp_type` is a human-readable string describing the fixed-point
-              type (e.g. ``"stable node"`` or ``"saddle"``).
-            * `eigvals` are the eigenvalues of the Jacobian at the fixed point.
-        """
-        tol = 1e-6
-        jacobian = self._get_jacobian(nu_star)
-        eigvals = np.linalg.eig(jacobian)[0]
-        real_parts = eigvals.real
-
-        # Count eigenvalue signs
-        n_pos = np.sum(real_parts > tol)
-        n_neg = np.sum(real_parts < -tol)
-        n_zero = len(eigvals) - n_pos - n_neg
-
-        if n_pos == 0 and n_zero == 0:
-            fp_type = "stable node"
-        elif n_neg == 0 and n_zero == 0:
-            fp_type = "unstable node"
-        elif n_pos > 0 and n_neg > 0:
-            fp_type = "saddle"
-        elif np.any(np.abs(eigvals.imag) > tol):
-            if np.all(real_parts < -tol):
-                fp_type = "stable focus (spiral sink)"
-            elif np.all(real_parts > tol):
-                fp_type = "unstable focus (spiral source)"
-            else:
-                fp_type = "spiral saddle"
-        else:
-            fp_type = "neutral / marginal"
-
-        return fp_type, eigvals
-
-    def _get_jacobian(self, nu_star: np.ndarray, eps: float = 1e-6) -> np.ndarray:
-        f0 = np.array(self._fixed_point_residual(nu_star))
-        n = len(nu_star)
-        J = np.zeros((n, n))
-        pert = np.zeros_like(nu_star)
-        for i in range(n):
-            pert[i] = eps
-            f1 = np.array(self._fixed_point_residual(nu_star + pert))
-            J[:, i] = (f1 - f0) / eps
-        return -J  # minus sign for d(dot{nu})/dnu
+        return logic.determine_stability(nu_star, self._fixed_point_residual)
 
     def _fixed_point_residual(
             self,
@@ -228,21 +200,6 @@ class LIFMeanField:
         phi_eff_0 = self.response_function(mu, sigma)
         self._reset_dynamic_pops()
         return phi_eff_0
-
-    def _brunel_sergei(self):
-        from scipy.special import zeta
-        a = -zeta(1 / 2) / np.sqrt(2)
-        b_s = a * np.sqrt(self.tau_s / self.tau_m)
-        return b_s
-
-    @staticmethod
-    def _integrand(z):
-        from scipy.special import erfcx
-        if z < -15:
-            return (1 - 1 / (2 * z ** 2) + 3 / (4 * z ** 4) - 15 / (8 * z ** 6)) * (-1 / z)
-
-        else:
-            return np.sqrt(np.pi) * erfcx(-z)
 
     def _set_dynamic_pops(self, dynamic_pops: list[int]):
         self._dynamic_pops = np.array(dynamic_pops)
