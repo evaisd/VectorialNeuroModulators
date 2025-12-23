@@ -3,8 +3,8 @@ import numpy as np
 
 
 def get_cluster_activity(
-        spike_matrix: np.ndarray[np.bool],
-        cluster_labels: np.ndarray[np.uint8],
+        spike_matrix: np.ndarray,
+        cluster_labels: np.ndarray,
         dt_ms: float = 1.,
         kernel_param: float = 20.,
         kernel_type: str = "uniform",
@@ -19,8 +19,8 @@ def get_cluster_activity(
 
 
 def get_average_cluster_firing_rate(
-        spike_matrix: np.ndarray[np.bool],
-        cluster_labels: np.ndarray[np.uint8],
+        spike_matrix: np.ndarray,
+        cluster_labels: np.ndarray,
         dt_ms: float = 1.,
         kernel_param: float = 20.,
         kernel_type: str = "uniform",):
@@ -32,7 +32,7 @@ def get_average_cluster_firing_rate(
     return firing_rates
 
 
-def get_firing_rates(spike_train: np.ndarray[np.bool | float],
+def get_firing_rates(spike_train: np.ndarray,
                     dt_ms: float = 1.,
                     kernel_param: float = 20.,
                     kernel_type: str = "uniform",):
