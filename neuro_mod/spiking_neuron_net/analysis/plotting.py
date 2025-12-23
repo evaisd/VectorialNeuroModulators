@@ -31,4 +31,5 @@ def gen_raster_plot(spikes: np.ndarray,
     ax.set_ylim(0, n_neurons)
     # fig.gca().invert_yaxis()
     fig.tight_layout()
+    plt.close()
     return fig
