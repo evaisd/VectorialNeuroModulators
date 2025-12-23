@@ -49,7 +49,6 @@ class LIFMeanField:
         self.n_populations = j_matrix.shape[0]
         self.j_mat = np.asarray(j_matrix, dtype=float)
         self.c_mat = np.asarray(c_matrix, dtype=np.uint16)
-        shape = self.c_mat.shape
         c_ext = self._gen_ext_arrs(np.asarray(c_ext))
         j_ext = self._gen_ext_arrs(np.asarray(j_ext))
         nu_ext = self._gen_ext_arrs(np.asarray(nu_ext))

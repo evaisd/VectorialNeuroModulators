@@ -55,14 +55,6 @@ class _BaseMeanFieldStager(_Stager, ABC):
         iterator = np.ndenumerate(self.p_mat)
         for (i, j), _ in iterator:
             self.c_mat[i, j] = self.p_mat[i, j] * pops[j]
-        to_remove = []
-        # for i, row in enumerate(self.c_mat.T):
-        #     if sum(row) == 0:
-        #         to_remove.append(i)
-        # self.c_mat = np.delete(self.c_mat, to_remove, axis=0)
-        # self.c_mat = np.delete(self.c_mat, to_remove, axis=1)
-        # self.j_mat = np.delete(self.j_mat, to_remove, axis=0)
-        # self.j_mat = np.delete(self.j_mat, to_remove, axis=1)
 
 
 class FullMeanFieldStager(_BaseMeanFieldStager):
