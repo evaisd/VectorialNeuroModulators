@@ -116,7 +116,7 @@ class StageSNNSimulation(_Stager):
 
     def _plot(self, *args, **kwargs):
         from neuro_mod.spiking_neuron_net.analysis.plotting import gen_raster_plot
-        spikes = args
+        spikes = args[0]
         pops = (
             self.n_excitatory,
             self.n_excitatory - self.clusters_params["n_excitatory_background"],
@@ -129,7 +129,7 @@ class StageSNNSimulation(_Stager):
             self.n_neurons,
             *pops
         )
-        plt_path = self.plots_dir / "spike_raster.png"
+        plt_path = kwargs.get("plt_path", self.plots_dir / "spike_raster.png")
         fig.savefig(plt_path)
 
     def run(self, *args, **kwargs):

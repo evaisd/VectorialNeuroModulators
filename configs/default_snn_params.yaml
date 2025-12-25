@@ -39,7 +39,7 @@ architecture:
       - -3.8
 
     j_potentiated:
-      - 16.25
+      - 16.85
       - 5.45
       - 6.25
       - 5.0
@@ -74,7 +74,7 @@ settings:
   random_seed: 256
 
 arousal:
-  level: 0.20
+  level: 0.3
   L: .75
   x_0: .2
   k: 1.25

@@ -21,6 +21,9 @@ class _Stager(ABC):
     j_mat: np.ndarray
     cluster_vec: np.ndarray
     types: dict
+    main_dir: Path = Path()
+    data_dir: Path = Path()
+    plots_dir: Path = Path()
 
     def __init__(
             self,
@@ -30,9 +33,7 @@ class _Stager(ABC):
     ):
         self.config = config
         self.settings = self._reader('settings')
-        self.main_dir = None
-        self.data_dir = None
-        self.plots_dir = None
+
         if self.settings["save"]:
             self._set_dirs()
         if random_seed is None:

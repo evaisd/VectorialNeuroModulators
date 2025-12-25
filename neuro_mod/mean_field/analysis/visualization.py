@@ -1,6 +1,6 @@
 
 import matplotlib.pyplot as plt
-from neuro_mod.mean_field.analysis import integration as ing
+from neuro_mod.mean_field.analysis.logic import integration as ing
 
 
 def gen_phase_diagram_plot(
