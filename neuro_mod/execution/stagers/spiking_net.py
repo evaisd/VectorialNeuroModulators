@@ -133,6 +133,7 @@ class StageSNNSimulation(_Stager):
         fig.savefig(plt_path)
 
     def run(self, *args, **kwargs):
+        self.logger.info("Running spiking network simulation.")
         self.duration_sec = kwargs.get("duration_sec", self.duration_sec)
         self.delta_t = kwargs.get("delta_t", self.delta_t)
         stimulus = torch.from_numpy(self._gen_stimulus())
@@ -160,4 +161,5 @@ class StageSNNSimulation(_Stager):
             "weights": self.weights,
             "clusters": self.clusters,
         }
+        self.logger.info("Spiking network simulation complete.")
         return outputs

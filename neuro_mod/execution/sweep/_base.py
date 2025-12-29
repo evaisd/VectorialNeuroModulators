@@ -5,6 +5,7 @@ from pathlib import Path
 from collections.abc import Iterable
 
 from neuro_mod.execution.stagers._base import _Stager
+from neuro_mod.execution.helpers import Logger
 from neuro_mod.perturbations.vectorial import VectorialPerturbation
 
 
@@ -15,6 +16,7 @@ class _BaseSweepRunner(ABC):
         self._stager: type[_Stager] | None = None
         self._sweep_object: _Stager | None = None
         self._save_outputs: list[str] | None = kwargs.get('save_outputs', None)
+        self.logger: Logger = kwargs.get('logger') or Logger(name=self.__class__.__name__)
         self._dirs = {
             "main": Path(),
             "data": Path(),
@@ -75,17 +77,23 @@ class _BaseSweepRunner(ABC):
             self._init_perturbator()
         param = param if isinstance(param, list) else [param]
         results = []
+        total_steps = len(sweep_params)
+        self.logger.info(f"Starting sweep with {total_steps} steps.")
         for i, sweep_param in enumerate(sweep_params):
             self._modify_params(param, sweep_param, param_idx)
             self._sweep_object = self._stager.from_dict(self._baseline_params)
+            if hasattr(self._sweep_object, "logger"):
+                self._sweep_object.logger = self.logger
             if perturbation:
                 rate_perturbation = self._get_perturbation()
                 kwargs.update({"rate_perturbation": rate_perturbation.T})
+            self.logger.info(f"Running sweep step {i + 1}/{total_steps} with {param}={sweep_param}.")
             results.append(self._step(param, i, sweep_param, **kwargs))
             config_path = self._dirs['configs'].joinpath(f"{i}.yaml")
             with open(config_path, 'w') as f:
                 yaml.dump(self._baseline_params, f, sort_keys=False)
         self.summary(results, sweep_params)
+        self.logger.info("Sweep complete.")
 
     @abstractmethod
     def _store(self, *args, **kwargs):
@@ -98,6 +106,8 @@ class _BaseSweepRunner(ABC):
             for k in self._dirs
         }
         _ = [d.mkdir(parents=True, exist_ok=True) for d in self._dirs.values()]
+        if self.logger.file_path is None:
+            self.logger.attach_file(str(self._dirs["metadata"] / "sweep.log"))
 
     @abstractmethod
     def summary(self, *args, **kwargs):

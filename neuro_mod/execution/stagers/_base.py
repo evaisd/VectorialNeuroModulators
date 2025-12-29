@@ -6,6 +6,8 @@ import shutil
 import yaml
 import numpy as np
 
+from neuro_mod.execution.helpers import Logger
+
 from neuro_mod.clustering import setup_matrices
 
 
@@ -29,9 +31,11 @@ class _Stager(ABC):
             self,
             config: Path | str | bytes,
             random_seed: int = None,
+            logger: Logger | None = None,
             **kwargs
     ):
         self.config = config
+        self.logger = logger or Logger(name=self.__class__.__name__)
         self.settings = self._reader('settings')
 
         if self.settings["save"]:
@@ -76,6 +80,10 @@ class _Stager(ABC):
         self.data_dir.mkdir(exist_ok=True)
         self.plots_dir = self.main_dir.joinpath('plots')
         self.plots_dir.mkdir(exist_ok=True)
+        self.metadata_dir = self.main_dir.joinpath('metadata')
+        self.metadata_dir.mkdir(exist_ok=True)
+        if self.logger.file_path is None:
+            self.logger.attach_file(str(self.metadata_dir / "run.log"))
 
     def _setup_clustered_matrices(self, *args, **kwargs):
         j_baseline = self.clusters_params.pop('j_baseline')
@@ -129,13 +137,17 @@ class _Stager(ABC):
                 plot_arg: str,
                 save_outputs: list[str] = None,
                 *args, **kwargs):
+        self.logger.info("Starting execution.")
         outputs = self.run(*args, **kwargs)
         if self.settings['save']:
             save_outputs = save_outputs if save_outputs is not None else outputs.keys()
             to_save = {k: outputs[k] for k in save_outputs if k in outputs}
             self._save(**to_save)
+            self.logger.info(f"Saved outputs to {self.data_dir}.")
         if self.settings['plot']:
             self._plot(outputs.get(plot_arg))
+            self.logger.info(f"Saved plot to {self.plots_dir}.")
+        self.logger.info("Execution complete.")
 
     @staticmethod
     def _project_to_cluster_space(

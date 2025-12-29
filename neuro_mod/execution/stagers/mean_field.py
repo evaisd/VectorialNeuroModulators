@@ -73,6 +73,7 @@ class FullMeanFieldStager(_BaseMeanFieldStager):
             n_runs: int = 100,
             *args,
             **kwargs):
+        self.logger.info(f"Running full mean-field simulation with {n_runs} runs.")
         if nu_init is None:
             nu_init = self._draw_nu_inits(n_runs)
         nu_init = np.atleast_2d(nu_init)
@@ -86,6 +87,7 @@ class FullMeanFieldStager(_BaseMeanFieldStager):
             "fixed_point": np.stack(ress, axis=0),
             "nu_init": np.stack(n_i, axis=0),
         }
+        self.logger.info("Full mean-field simulation complete.")
         return output
 
     def _draw_nu_inits(self,
@@ -133,6 +135,7 @@ class ReducedMeanFieldStager(_BaseMeanFieldStager):
             focus_pops: list[int],
             grid_density: float = .5,
             grid_lims: tuple[float, float] | list[tuple[float, float]] = (0., 60.),):
+        self.logger.info("Running reduced mean-field simulation.")
         from neuro_mod.mean_field.analysis.logic import integration as ing
         nu_vecs = self._gen_grid_vecs(focus_pops, grid_density, grid_lims)
         mesh, nu_outs = self._get_effective_rates_on_grid(focus_pops, *nu_vecs)
@@ -150,6 +153,7 @@ class ReducedMeanFieldStager(_BaseMeanFieldStager):
             "nu_outs": nu_outs,
             "mesh": mesh
         }
+        self.logger.info("Reduced mean-field simulation complete.")
         return outputs
 
     def _get_effective_rates_on_grid(self, focus_pops, *nu_vecs):
