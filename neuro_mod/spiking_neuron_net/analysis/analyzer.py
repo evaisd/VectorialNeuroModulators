@@ -314,6 +314,7 @@ class Analyzer:
         if total_entries == 0:
             return 0.0
         return nonzero / total_entries
+
     def get_sequence_probability(
             self,
             *idx_or_identity: int | tuple[int, ...],
