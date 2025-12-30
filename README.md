@@ -43,45 +43,145 @@ or add the repository root to your `PYTHONPATH` when running scripts.
   - **`mean_field/`**
     - **`core/lif_mean_field.py`**: `LIFMeanField` class implementing the
       population-rate mean-field model and fixed-point / stability analysis.
-    - **`runners/main_runner.py`**: `MainMFRunner` helper to run mean-field
-      fixed-point solvers and stability classification.
+    - **`analysis/`**: Mean-field analysis helpers and visualization.
   - **`spiking_neuron_net/`**
     - **`lif_net.py`**: `LIFNet` PyTorch module for simulating a recurrent
       LIF spiking network with synaptic and membrane dynamics.
     - **`clustering/`**: Utilities to construct clustered network connectivity.
-    - **`execution/`**: Staging and orchestration for simulations.
     - **`external/`**: Stimulus and external current generators.
+    - **`analysis/`**: Spiking-network analysis and attractor logic.
+  - **`execution/`**: Stagers, sweep runners, repeaters, and logging helpers.
 - **`configs/`**: Example YAML configuration templates for simulations.
-- **`examples/`**:
-  - `mean_field_example.ipynb`: Interactive example of mean-field usage.
-  - `spiking_net_test_simulation.py`: Example script that stages and runs a
-    full spiking-network simulation from a YAML config.
+- **`scripts/`**:
+  - `run_snn.py`: Run repeated spiking-net simulations and write analysis artifacts.
+  - `load_snn_analysis.py`: Load a saved spiking-net analysis folder.
 - **`test_sim/`**: Example output folder (plots and data) from a test run.
 
 ---
 
-### Quick start
+### Main apps and usage
 
-#### Run a spiking network test simulation
+#### Spiking network stager (single simulation)
 
-From the repository root:
+`StageSNNSimulation` stages a single spiking-network run from a YAML config
+and returns voltages, currents, spikes, and metadata.
 
 ```bash
 python examples/spiking_net_test_simulation.py
 ```
 
-By default this uses `configs/spiking_network_simulation_config_template.yaml`
-and writes outputs (raster plots, `.npz` data) under `test_sim/sim_name/`.
+Minimal Python usage:
 
-To customize a simulation, copy the template, edit it, and point the stager to it:
+```python
+from neuro_mod.execution.stagers import StageSNNSimulation
 
-```bash
-cp configs/spiking_network_simulation_config_template.yaml configs/my_sim.yaml
-# edit configs/my_sim.yaml
-python -m neuro_mod.spiking_neuron_net.execution.staging configs/my_sim.yaml
+stager = StageSNNSimulation("configs/default_snn_params.yaml", random_seed=123)
+outputs = stager.run()
+stager.execute(plot_arg="spikes")
 ```
 
-#### Use the mean-field model directly
+If `settings.save` and `settings.plot` are enabled in the config, `execute()`
+writes outputs under `settings.save_dir/settings.sim_name/` with `data/`,
+`plots/`, and `metadata/` subfolders.
+
+To customize a simulation, copy a template and point the stager to it:
+
+```bash
+cp configs/templates/spiking_net_template.yaml configs/my_sim.yaml
+# edit configs/my_sim.yaml
+python -c "from neuro_mod.execution.stagers import StageSNNSimulation; StageSNNSimulation('configs/my_sim.yaml').execute(plot_arg='spikes')"
+```
+
+#### Spiking network stager (repeated runs + analysis)
+
+Use `scripts/run_snn.py` to repeat a config and build a saved analysis bundle:
+
+```bash
+python scripts/run_snn.py \
+  --config configs/snn_test_run.yaml \
+  --save-dir simulations/snn_test_run \
+  --n-repeats 4
+```
+
+This runs `Repeater` + `StageSNNSimulation`, writes `data/spikes_*.npy`,
+`clusters.npy`, and saves attractor analysis to `analysis/`.
+
+#### Mean-field stagers
+
+`FullMeanFieldStager` runs fixed-point solves from random initial conditions,
+and `ReducedMeanFieldStager` computes 2D potential landscapes for selected
+populations.
+
+```python
+from neuro_mod.execution.stagers.mean_field import FullMeanFieldStager, ReducedMeanFieldStager
+
+full = FullMeanFieldStager("configs/2_cluster_mf.yaml", random_seed=7)
+full_outputs = full.run(n_runs=50)
+
+reduced = ReducedMeanFieldStager("configs/2_cluster_mf.yaml", random_seed=7)
+reduced_outputs = reduced.run(focus_pops=[0, 1], grid_density=0.5, grid_lims=(0.0, 60.0))
+```
+
+#### Sweep stagers (parameter sweeps)
+
+Sweep runners are base classes that wrap stagers and iterate a parameter list.
+To use them, subclass and implement `_step`, `summary`, and plotting.
+
+```python
+from neuro_mod.execution.sweep.spiking_net import SNNBaseSweepRunner
+
+class SpikeCountSweep(SNNBaseSweepRunner):
+    def _step(self, param, idx, sweep_param, **kwargs):
+        outputs = self._sweep_object.run(**kwargs)
+        return int(outputs["spikes"].sum())
+
+    def _store(self, *args, **kwargs):
+        pass
+
+    def summary(self, results, sweep_params):
+        print(list(zip(sweep_params, results)))
+
+    def _summary_plot(self, *args, **kwargs):
+        pass
+
+    def summarize_repeated_run(self, *args, **kwargs):
+        pass
+
+sweep = SpikeCountSweep()
+sweep.execute(
+    main_dir="simulations/sweep_demo",
+    baseline_params="configs/snn_test_run.yaml",
+    param=["external_currents", "nu_ext_baseline"],
+    sweep_params=[5.0, 7.5, 10.0],
+    param_idx=0,
+)
+```
+
+Each sweep step writes a config snapshot under `configs/` in the sweep output
+directory so runs are reproducible.
+
+#### Spiking-net analyzer
+
+The `Analyzer` reads saved spikes and computes attractor statistics and
+transition matrices.
+
+```python
+from neuro_mod.spiking_neuron_net.analysis.analyzer import Analyzer
+
+analyzer = Analyzer("simulations/snn_test_run/data", clusters="simulations/snn_test_run/clusters.npy", dt=0.5e-3)
+print(analyzer.get_num_states())
+analyzer.save_analysis("simulations/snn_test_run/analysis")
+
+loaded = Analyzer.load_analysis("simulations/snn_test_run/analysis")
+print(loaded.get_transition_matrix().shape)
+```
+
+The helper script `scripts/load_snn_analysis.py` shows how to load a saved
+analysis bundle.
+
+---
+
+### Use the mean-field model directly
 
 The `LIFMeanField` class exposes population-level equations and utilities for
 finding fixed points and their stability:

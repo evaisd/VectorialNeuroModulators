@@ -1,3 +1,4 @@
+"""Stager for spiking network simulations."""
 
 from pathlib import Path
 import numpy as np
@@ -14,6 +15,7 @@ DEFAULT_PARAMS = '../../../configs/default_snn_params.yaml'
 
 
 class StageSNNSimulation(_Stager):
+    """Run a spiking network simulation from configuration."""
 
     stimulated_clusters: np.ndarray | list
 
@@ -21,6 +23,13 @@ class StageSNNSimulation(_Stager):
                  config: Path | str | bytes = DEFAULT_PARAMS,
                  random_seed: int = None,
                  **kwargs):
+        """Initialize the spiking network stager.
+
+        Args:
+            config: Path, string, or bytes for the YAML config.
+            random_seed: Optional random seed.
+            **kwargs: Extra parameters forwarded to the base stager.
+        """
         super().__init__(config, random_seed, **kwargs)
         self.stimulus_params = self._reader('stimulus')
         self.external_currents_params = self._reader('external_currents')
@@ -133,6 +142,17 @@ class StageSNNSimulation(_Stager):
         fig.savefig(plt_path)
 
     def run(self, *args, **kwargs):
+        """Execute the spiking network simulation.
+
+        Args:
+            *args: Ignored positional arguments.
+            **kwargs: Optional overrides such as `duration_sec`, `delta_t`,
+                and `rate_perturbation`.
+
+        Returns:
+            Dictionary of outputs including voltage, current, spikes, and
+            stimulus.
+        """
         self.logger.info("Running spiking network simulation.")
         self.duration_sec = kwargs.get("duration_sec", self.duration_sec)
         self.delta_t = kwargs.get("delta_t", self.delta_t)

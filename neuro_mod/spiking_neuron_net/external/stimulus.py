@@ -1,10 +1,13 @@
+"""Stimulus generation utilities for spiking neuron simulations."""
 
 import numpy as np
 
 
 class StimulusGenerator:
+    """Generate temporal stimulus waveforms for neuron populations."""
 
     def __init__(self):
+        """Initialize stimulus shape mappings."""
 
         self.funcs = {
             "box": self._box,
@@ -86,6 +89,23 @@ class StimulusGenerator:
                           *args,
                           **kwargs
                           ) -> np.ndarray:
+        """Generate a full stimulus matrix for the simulation.
+
+        Args:
+            stimulus_shape: Name or enum id of the stimulus shape.
+            total_duration: Total duration in seconds.
+            n_neurons: Number of neurons.
+            onsets: Start times (seconds) for stimuli.
+            duration: Duration (seconds) of each stimulus.
+            amplitude: Stimulus amplitude.
+            stimulated_neurons: Neuron indices to receive the stimulus.
+            delta_t: Time step in seconds.
+            *args: Ignored positional arguments for compatibility.
+            **kwargs: Additional parameters for stimulus shapes.
+
+        Returns:
+            Stimulus array of shape `(T, n_neurons)`.
+        """
 
         if isinstance(stimulus_shape, str):
             try:

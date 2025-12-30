@@ -1,3 +1,4 @@
+"""Core mean-field equations and stability utilities."""
 
 from typing import Callable
 import numpy as np
@@ -19,6 +20,18 @@ def equations(
         ext_mu: np.ndarray,
         ext_sigma: np.ndarray,    
 ):
+    """Compute mean and standard deviation of input currents.
+
+    Args:
+        nu: Population firing rates.
+        a_mat: Effective coupling matrix for the mean input.
+        b_mat: Effective coupling matrix for the variance.
+        ext_mu: External mean input per population.
+        ext_sigma: External variance input per population.
+
+    Returns:
+        Tuple `(mu, sigma)` for the mean and standard deviation inputs.
+    """
     mu = (a_mat @ nu + ext_mu)
     var = b_mat @ nu + ext_sigma
     sigma = np.sqrt(np.maximum(var, 1e-12) / 1.)
@@ -29,6 +42,16 @@ def determine_stability(
         nu_star: np.ndarray,
         f: Callable[[np.ndarray], list[float]],
 ):
+    """Classify stability of a fixed point using Jacobian eigenvalues.
+
+    Args:
+        nu_star: Fixed point rates.
+        f: Function returning residuals of the fixed-point equations.
+
+    Returns:
+        Tuple `(fp_type, eigvals)` where `fp_type` is a descriptive string
+        and `eigvals` are the Jacobian eigenvalues.
+    """
     tol = 1e-6
     jacobian = get_jacobian(
         nu_star,
@@ -65,6 +88,17 @@ def get_jacobian(
         f: Callable[[np.ndarray], list[float]],
         eps: float = 1e-6,
 ):
+    """Estimate the Jacobian matrix via finite differences.
+
+    Args:
+        nu_star: Point at which to evaluate the Jacobian.
+        f: Function returning residuals.
+        eps: Perturbation size for finite differences.
+
+    Returns:
+        The Jacobian matrix of `f` at `nu_star`, with sign flipped to match
+        `d(dot{nu})/dnu`.
+    """
     f0 = np.array(f(nu_star))
     n = len(nu_star)
     jacobian = np.zeros((n, n))
@@ -77,6 +111,7 @@ def get_jacobian(
 
 
 def integrand(z):
+    """Integrand for the LIF transfer function expression."""
     from scipy.special import erfcx
     if z < -15:
         return (1 - 1 / (2 * z ** 2) + 3 / (4 * z ** 4) - 15 / (8 * z ** 6)) * (-1 / z)
@@ -86,6 +121,15 @@ def integrand(z):
 
 
 def brunei_sergei(tau_s: np.ndarray | float, tau_m: np.ndarray | float):
+    """Compute the Brunel-Sergei correction term.
+
+    Args:
+        tau_s: Synaptic time constant(s).
+        tau_m: Membrane time constant(s).
+
+    Returns:
+        Correction term `b_s` used in LIF response functions.
+    """
     from scipy.special import zeta
     a = -zeta(1 / 2) / np.sqrt(2)
     b_s = a * np.sqrt(tau_s / tau_m)

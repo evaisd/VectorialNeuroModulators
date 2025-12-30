@@ -1,3 +1,4 @@
+"""Firing rate estimation utilities."""
 
 import numpy as np
 
@@ -8,6 +9,18 @@ def get_average_cluster_firing_rate(
         dt_ms: float = .5,
         kernel_param: float = 20.,
         kernel_type: str = "gaussian",):
+    """Compute average firing rates per cluster.
+
+    Args:
+        spike_matrix: Spike trains with shape `(T, n_neurons)`.
+        cluster_labels: Cluster labels per neuron.
+        dt_ms: Time step in milliseconds.
+        kernel_param: Kernel width parameter.
+        kernel_type: `"gaussian"` or `"box"`.
+
+    Returns:
+        Array of firing rates with shape `(n_clusters, T)`.
+    """
     unique_clusters, indices = np.unique(cluster_labels, return_index=True)
     # firing_rates = get_firing_rates(spike_matrix, dt_ms, kernel_param, kernel_type).T
     clustered_spikes = np.add.reduceat(spike_matrix, indices, axis=1).T
@@ -20,6 +33,17 @@ def get_firing_rates(spike_train: np.ndarray,
                     dt_ms: float = .5,
                     kernel_param: float = 20.,
                     kernel_type: str = "gaussian",):
+    """Smooth spike trains into firing rates.
+
+    Args:
+        spike_train: Spike trains with shape `(T, n_units)`.
+        dt_ms: Time step in milliseconds.
+        kernel_param: Kernel width parameter.
+        kernel_type: `"gaussian"` or `"box"`.
+
+    Returns:
+        Smoothed firing rate array.
+    """
     dt = dt_ms * 1e-3
     window_steps = int(kernel_param / dt_ms)
     window_steps = max(1, window_steps)  # Ensure at least 1 step

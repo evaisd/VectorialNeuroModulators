@@ -64,7 +64,7 @@ settings:
   random_seed: 256
 
 arousal:
-  level: 0.001
+  level: 0.275
   L: .75
   x_0: .2
   k: 1.25

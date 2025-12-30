@@ -1,3 +1,4 @@
+"""External current generation utilities for spiking networks."""
 
 from functools import lru_cache
 import numpy as np
@@ -16,6 +17,24 @@ def generate_external_currents(
         *args,
         **kwargs
 ):
+    """Generate external Poisson currents for clustered populations.
+
+    Args:
+        nu_ext_baseline: Baseline rates for external inputs.
+        c_ext: External in-degree parameters.
+        duration: Total simulation duration in seconds.
+        delta_t: Time step in seconds.
+        cluster_vec: Cluster boundary indices for neurons.
+        n_e_clusters: Number of excitatory clusters.
+        cluster_based_perturbations: Optional per-cluster perturbations.
+        neuron_based_perturbations: Optional per-neuron perturbations.
+        rng: Optional NumPy random generator.
+        *args: Ignored positional arguments for compatibility.
+        **kwargs: Ignored keyword arguments for compatibility.
+
+    Returns:
+        Array of shape `(T, 4, N)` containing external currents.
+    """
     total_steps = int(duration / delta_t)
     full_output = np.zeros((4, total_steps, cluster_vec[-1]))
     projected_nu = _project_to_cluster_space(len(cluster_vec) - 1,
@@ -71,6 +90,7 @@ def _project_to_cluster_space(
 
 
 class CurrentGenerator:
+    """Generate external currents with reusable configuration."""
 
     def __init__(
             self,
@@ -81,6 +101,16 @@ class CurrentGenerator:
             n_neurons: int,
             c_ext: np.ndarray[int] | list[int],
     ):
+        """Initialize the current generator.
+
+        Args:
+            rng: NumPy random generator.
+            delta_t: Time step in seconds.
+            cluster_vec: Cluster boundary indices.
+            n_e_clusters: Number of excitatory clusters.
+            n_neurons: Total number of neurons.
+            c_ext: External in-degree parameters (length 4).
+        """
         self.rng = rng
         self.delta_t = delta_t
         self.sizes = np.diff(cluster_vec)
@@ -108,6 +138,16 @@ class CurrentGenerator:
             c_perturbations: list[float] | np.ndarray[float] = None,  # (C, T)
             n_perturbations: list[float] | np.ndarray[float] = None   # (T,)
     ):
+        """Generate external currents for a single time step.
+
+        Args:
+            baseline_rates: Baseline input rates (length 4).
+            c_perturbations: Optional cluster perturbations.
+            n_perturbations: Optional neuron perturbations.
+
+        Returns:
+            Array of shape `(4, n_neurons)` with generated currents.
+        """
         baseline_rates = self._project_to_cluster_space(baseline_rates)
         c_perturbations = np.zeros((self.n_clusters, 1)) if c_perturbations is None else c_perturbations
         n_perturbations = np.zeros(self.n_neurons) if n_perturbations is None else n_perturbations

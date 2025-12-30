@@ -1,3 +1,4 @@
+"""Analysis helpers for spiking network simulation outputs."""
 
 from pathlib import Path
 import json
@@ -9,6 +10,7 @@ from neuro_mod.spiking_neuron_net.analysis.logic import activity
 
 
 class Analyzer:
+    """Analyze spiking activity to extract attractors and transitions."""
 
     _attractor_map: dict
     total_sim_duration_ms: float
@@ -22,6 +24,13 @@ class Analyzer:
             clusters: str | Path = None,
             dt: float = .5e-3
                  ):
+        """Initialize the analyzer for a spikes file or folder.
+
+        Args:
+            spikes_or_folder: Path to a spikes file or directory of sessions.
+            clusters: Optional path to cluster labels.
+            dt: Time step in seconds.
+        """
         self.spikes_path = Path(spikes_or_folder)
         self.clusters_path = clusters
         self.dt = dt
@@ -68,6 +77,12 @@ class Analyzer:
         return np.concatenate(series, axis=axis)
 
     def get_data(self):
+        """Load and concatenate spikes across sessions.
+
+        Returns:
+            Tuple `(spikes, clusters)` where `spikes` is concatenated across
+            sessions and `clusters` is the shared cluster label array.
+        """
         sessions = self._get_sessions()
         if not sessions:
             return np.empty(()), np.empty(())
@@ -83,6 +98,14 @@ class Analyzer:
     @lru_cache()
     def get_neuron_spike_rate(self,
                               **kwargs):
+        """Compute firing rates for individual neurons.
+
+        Args:
+            **kwargs: Overrides for clustering parameters.
+
+        Returns:
+            Array of firing rates with shape `(n_neurons, T)`.
+        """
         params = self._clustering_params.copy()
         params.update(kwargs)
         params.setdefault('dt_ms', self.dt / 1e-3)
@@ -99,6 +122,14 @@ class Analyzer:
     @lru_cache()
     def get_cluster_spike_rate(self,
                                **kwargs):
+        """Compute firing rates aggregated by cluster.
+
+        Args:
+            **kwargs: Overrides for clustering parameters.
+
+        Returns:
+            Array of firing rates with shape `(n_clusters, T)`.
+        """
         firing_rates = self._get_session_cluster_spike_rates(**kwargs)
         return self._aggregate_series(firing_rates, axis=1)
 
@@ -107,6 +138,14 @@ class Analyzer:
             self,
             **kwargs
     ):
+        """Compute binary activity matrices per cluster.
+
+        Args:
+            **kwargs: Overrides for clustering parameters.
+
+        Returns:
+            Boolean activity array with shape `(n_clusters, T)`.
+        """
         activity_mats = []
         for cluster_rates in self._get_session_cluster_spike_rates(**kwargs):
             activity_mats.append(activity.get_activity(cluster_rates))
@@ -115,6 +154,14 @@ class Analyzer:
     @lru_cache()
     def get_attractors_data(self,
                               **kwargs):
+        """Extract and merge attractors across sessions.
+
+        Args:
+            **kwargs: Parameters forwarded to attractor extraction.
+
+        Returns:
+            Mapping from attractor identity to summary dicts.
+        """
         minimal_time_ms = kwargs.pop('minimal_time_ms', self._minimal_life_span_ms)
         session_attractors = self._get_session_attractors_data(minimal_time_ms, **kwargs)
         session_lengths = self._get_session_lengths_steps(**kwargs)
@@ -127,6 +174,14 @@ class Analyzer:
 
     def get_attractor_data(self,
                            *idx_or_identity: int | tuple[int, ...],):
+        """Fetch attractor summaries by index or identity.
+
+        Args:
+            *idx_or_identity: Attractor indices or identity tuples.
+
+        Returns:
+            Dictionary of attractor data keyed by the input identifiers.
+        """
         out = {}
         for idx in idx_or_identity:
             if isinstance(idx, tuple):
@@ -141,6 +196,17 @@ class Analyzer:
             self,
             *clusters: int,
     ) -> int:
+        """Resolve an attractor identity to its index.
+
+        Args:
+            *clusters: Cluster indices describing the attractor identity.
+
+        Returns:
+            The index of the attractor.
+
+        Raises:
+            ValueError: If the attractor is not found.
+        """
         idx = next(
             (key for
              key, value in
@@ -156,6 +222,15 @@ class Analyzer:
             self,
             *idx_or_identities: int | tuple[int, ...],
             **kwargs):
+        """Compute mean and standard deviation of attractor lifespans.
+
+        Args:
+            *idx_or_identities: Attractor indices or identity tuples.
+            **kwargs: Forwarded to `get_attractor_data`.
+
+        Returns:
+            Tuple `(means, stds)` as arrays in milliseconds.
+        """
         means, stds = [], []
         for idx in idx_or_identities:
             attractor_data = self.get_attractor_data(idx, **kwargs)[idx]
@@ -169,6 +244,15 @@ class Analyzer:
     def get_attractor_prob(self,
                            *idx_or_identity: int | tuple[int, ...],
                            **kwargs) -> np.ndarray:
+        """Compute occurrence probabilities for attractors.
+
+        Args:
+            *idx_or_identity: Attractor indices or identity tuples.
+            **kwargs: Forwarded to `get_attractor_data`.
+
+        Returns:
+            Array of probabilities for each attractor.
+        """
         probs = []
         for idx in idx_or_identity:
             attractor_data = self.get_attractor_data(idx, **kwargs)[idx]
@@ -177,21 +261,26 @@ class Analyzer:
         return np.stack(probs, axis=0)
 
     def get_num_states(self) -> int:
+        """Return the number of detected attractor states."""
         return len(self.attractors_data)
 
     def get_life_spans(self):
+        """Return mean and std of lifespans for all attractors."""
         num_states = self.get_num_states()
         return self.get_mean_lifespan(*range(num_states))
 
     def get_occurrences(self) -> np.ndarray:
+        """Return occurrence counts for each attractor."""
         att = self.attractors_data
         return np.array([v["#"] for v in att.values()])
 
     def get_num_clusters(self) -> np.ndarray:
+        """Return number of clusters participating in each attractor."""
         att = self.attractors_data
         return np.array([len(k) for k in att.keys()])
 
     def get_attractor_probs(self) -> np.ndarray:
+        """Return probability of all attractors in order of indices."""
         num_states = self.get_num_states()
         return np.array([self.get_attractor_prob(*range(num_states))]).flatten()
 
@@ -203,6 +292,17 @@ class Analyzer:
             transition_filename: str = "transition_matrix.npy",
             config_filename: str = "analysis_config.json",
     ) -> Path:
+        """Persist analysis artifacts to disk.
+
+        Args:
+            folder: Directory to write analysis artifacts.
+            attractors_filename: Filename for attractor data.
+            transition_filename: Filename for transition matrix.
+            config_filename: Filename for config metadata.
+
+        Returns:
+            Path to the analysis folder.
+        """
         self.logger.info("Saving analysis artifacts.")
         folder_path = Path(folder)
         folder_path.mkdir(parents=True, exist_ok=True)
@@ -245,6 +345,15 @@ class Analyzer:
             *,
             config_filename: str = "analysis_config.json",
     ) -> "Analyzer":
+        """Load a saved analysis from disk.
+
+        Args:
+            folder: Analysis directory.
+            config_filename: Name of the config file.
+
+        Returns:
+            An `Analyzer` instance populated with saved data.
+        """
         folder_path = Path(folder)
         config_path = folder_path / config_filename
         config = json.loads(config_path.read_text())
@@ -286,6 +395,17 @@ class Analyzer:
                             idx_or_identity_to: int | tuple[int, ...],
                             *args,
                             **kwargs) -> float:
+        """Compute transition probability between two attractors.
+
+        Args:
+            idx_or_identity_from: Source attractor index or identity.
+            idx_or_identity_to: Destination attractor index or identity.
+            *args: Ignored positional arguments.
+            **kwargs: Ignored keyword arguments.
+
+        Returns:
+            Transition probability from source to destination.
+        """
         transition_matrix = self.get_transition_matrix()
         if isinstance(idx_or_identity_from, tuple):
             idx_or_identity_from = self.get_attractor_idx(*idx_or_identity_from)
@@ -295,6 +415,7 @@ class Analyzer:
 
     @lru_cache()
     def get_transition_matrix(self) -> np.ndarray:
+        """Return the transition matrix between attractors."""
         if hasattr(self, "_transition_matrix"):
             return self._transition_matrix
         session_attractors = self._get_session_attractors_data(self._minimal_life_span_ms)
@@ -312,6 +433,7 @@ class Analyzer:
 
     @lru_cache()
     def get_unique_attractors(self,):
+        """Return the set of unique attractor identities."""
         attractors = set(list(self.attractors_data.keys()))
         return attractors
 
@@ -383,6 +505,15 @@ class Analyzer:
             time_ms: float,
             **kwargs,
     ) -> int:
+        """Count unique attractors observed up to a time threshold.
+
+        Args:
+            time_ms: Time threshold in milliseconds.
+            **kwargs: Parameters forwarded to attractor extraction.
+
+        Returns:
+            Number of unique attractors observed up to `time_ms`.
+        """
         if time_ms < 0:
             raise ValueError("time_ms must be non-negative.")
         dt_ms = self.dt * 1e3
@@ -401,6 +532,15 @@ class Analyzer:
             time_ms: float,
             **kwargs,
     ) -> float:
+        """Compute transition density up to a time threshold.
+
+        Args:
+            time_ms: Time threshold in milliseconds.
+            **kwargs: Parameters forwarded to attractor extraction.
+
+        Returns:
+            Fraction of observed transitions among possible pairs.
+        """
         if time_ms < 0:
             raise ValueError("time_ms must be non-negative.")
         dt_ms = self.dt * 1e3
@@ -427,6 +567,17 @@ class Analyzer:
             self,
             *idx_or_identity: int | tuple[int, ...],
     ):
+        """Compute probability of a sequence of attractor transitions.
+
+        Args:
+            *idx_or_identity: Sequence of attractor indices or identities.
+
+        Returns:
+            Probability of the sequence under the transition matrix.
+
+        Raises:
+            ValueError: If fewer than two attractors are provided.
+        """
         if len(idx_or_identity) == 1:
             raise ValueError('Enter atleast two attractors')
         probs = [self.get_transition_prob(att_a, att_b)

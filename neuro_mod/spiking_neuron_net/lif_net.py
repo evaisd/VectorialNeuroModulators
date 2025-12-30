@@ -1,3 +1,4 @@
+"""PyTorch implementation of a leaky integrate-and-fire network."""
 
 import torch
 import torch.nn as nn
@@ -35,6 +36,19 @@ class LIFNet(nn.Module):
             delta_t: float = 1e-3,
             currents_generator = None
     ):
+        """Initialize the LIF network module.
+
+        Args:
+            synaptic_weights: Recurrent weight matrix.
+            j_ext: External synaptic efficacies.
+            tau_membrane: Membrane time constants.
+            tau_synaptic: Synaptic time constants.
+            tau_refractory: Refractory periods per neuron.
+            threshold: Firing thresholds.
+            reset_voltage: Reset voltages after spiking.
+            delta_t: Time step for integration.
+            currents_generator: Optional external currents generator.
+        """
         super().__init__()
 
         self.delta_t = delta_t
@@ -79,7 +93,11 @@ class LIFNet(nn.Module):
             return param.float()
 
         else:
-            raise TypeError(f"Unsupported parameter type: {type(param)}")
+            try:
+                param = torch.from_numpy(param)
+                return self._broadcast_param(param)
+            except TypeError:
+                raise TypeError(f"Unsupported parameter type: {type(param)}")
 
     def _get_propagators(self):
         propagators = torch.zeros((self.n_neurons, 3, 3))
@@ -109,6 +127,18 @@ class LIFNet(nn.Module):
             external_currents: torch.Tensor | None = None,
             mechanism: str | None = None,
     ):
+        """Run the network forward over a stimulus sequence.
+
+        Args:
+            voltage: Initial membrane voltage vector.
+            synaptic_current: Initial synaptic current vector.
+            stimulus: Stimulus matrix of shape `(T, n_neurons)`.
+            external_currents: Optional external currents iterator or tensor.
+            mechanism: Integration mechanism (`"euler"` or analytic).
+
+        Returns:
+            Tuple `(voltage_history, current_history, spikes_history)`.
+        """
         if external_currents is None:
             external_currents = torch.zeros_like(stimulus)
 

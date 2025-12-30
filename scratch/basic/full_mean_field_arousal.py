@@ -22,9 +22,9 @@ class ArousalSweepRunner(FullMeanFieldBaseSweepRunner):
               **kwargs):
         outputs = self._sweep_object.run(*args)
         e_clusters = self._sweep_object.clusters_params['n_clusters']
-        e_cluster_active_rates, e_cluster_non_active_rates = self._analysis(outputs['fixed_point'][:, :e_clusters])
+        active_rates, non_active_rates, uniform_rates = self._analysis(outputs['fixed_point'][:, :e_clusters])
         self._store(sweep_param, **outputs)
-        return e_cluster_active_rates, e_cluster_non_active_rates
+        return active_rates, non_active_rates, uniform_rates
 
     def _store(self, arousal_level, **kwargs):
         data_file = self._dirs['data'].joinpath(f"arousal_level_{arousal_level:.2f}.npz")
@@ -35,7 +35,7 @@ class ArousalSweepRunner(FullMeanFieldBaseSweepRunner):
     def _analysis(rates: np.ndarray, z_threshold: float = 2.):
         from neuro_mod.mean_field.analysis.logic.activity import classify_active_clusters
         active_clusters = classify_active_clusters(rates, z_threshold)
-        return rates[active_clusters].mean(), rates[~active_clusters].mean()
+        return active_clusters
 
     def summary(self, *args, **kwargs):
         import matplotlib.pyplot as plt
@@ -44,6 +44,7 @@ class ArousalSweepRunner(FullMeanFieldBaseSweepRunner):
         fig, ax = plt.subplots(figsize=(16, 8))
         ax.plot(sweep_params, results[0], 'o-', label='active')
         ax.plot(sweep_params, results[1], 'o-', label='non-active')
+        ax.plot(sweep_params, results[2], 'o-', label='uniform')
         ax.legend()
         ax.set_xlabel("Arousal Level")
         ax.set_ylabel("E cluster Spike Rate / S")

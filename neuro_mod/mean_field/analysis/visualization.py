@@ -1,3 +1,4 @@
+"""Plotting helpers for mean-field analysis outputs."""
 
 import matplotlib.pyplot as plt
 from neuro_mod.mean_field.analysis.logic import integration as ing
@@ -10,6 +11,18 @@ def gen_phase_diagram_plot(
         *args,
         **kwargs
 ):
+    """Plot firing rates across a swept parameter.
+
+    Args:
+        sweep_param_name: Name of the sweep parameter.
+        sweep_param_vals: Values of the sweep parameter.
+        results: Firing rate results with shape `(n_populations, n_vals)`.
+        *args: Extra args forwarded to `ax.plot`.
+        **kwargs: Extra kwargs forwarded to `ax.plot`.
+
+    Returns:
+        Tuple `(fig, ax)` for the created Matplotlib figure and axes.
+    """
     fig, ax = plt.subplots(1, 1, figsize=(18, 18))
     for i in range(results.shape[0]):
         ax.plot(
@@ -32,6 +45,18 @@ def gen_rate_flow_map(
         *args,
         **kwargs
 ):
+    """Generate a rate flow map with minimal-resistance path.
+
+    Args:
+        nu_in_grid: Grid of input rates, shape `(N, M, 2)`.
+        force_field: Vector field with shape `(N, M, 2)`.
+        points: Optional list of annotations with `point` and `kind`.
+        *args: Extra args forwarded to `ax.quiver`.
+        **kwargs: Extra kwargs forwarded to `ax.quiver`.
+
+    Returns:
+        Tuple `(fig, ax)` for the created Matplotlib figure and axes.
+    """
     path = ing.get_path_of_min_res(force_field)
     freq = round(nu_in_grid.shape[0] / 50), round(nu_in_grid.shape[1] / 50)
     _grid = nu_in_grid[::freq[0], ::freq[0], ...]
@@ -60,6 +85,18 @@ def gen_potential_plot(
         *args,
         **kwargs
 ):
+    """Plot potential along a path computed from a force field.
+
+    Args:
+        grid: Grid of coordinates, shape `(N, M, 2)`.
+        force_field: Vector field with shape `(N, M, 2)`.
+        path: Path indices used for integration.
+        *args: Ignored positional arguments for compatibility.
+        **kwargs: Ignored keyword arguments for compatibility.
+
+    Returns:
+        Tuple `(fig, ax)` for the created Matplotlib figure and axes.
+    """
 
     potential, displacement = ing.compute_line_integral_on_path(grid, force_field, path)
     fig, ax = plt.subplots(figsize=(18, 18))

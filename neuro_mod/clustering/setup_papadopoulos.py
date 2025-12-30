@@ -1,3 +1,5 @@
+"""Matrix setup utilities for clustered connectivity (Papadopoulos-style)."""
+
 from functools import lru_cache
 from itertools import product, chain
 
@@ -17,6 +19,28 @@ def setup_matrices(
         *args,
         **kwargs
 ):
+    """Construct connectivity and synaptic matrices for clustered networks.
+
+    Args:
+        n_neurons: Total number of neurons.
+        n_excitatory: Number of excitatory neurons.
+        n_excitatory_background: Number of background excitatory neurons.
+        n_inhibitory_background: Number of background inhibitory neurons.
+        n_clusters: Number of excitatory/inhibitory clusters.
+        connectivity_fraction_probs: Connection probabilities for population pairs.
+        j_baseline: Baseline synaptic strengths.
+        j_potentiated: Potentiated strengths for within-cluster connections.
+        potentiate: Whether to apply potentiation/depression scheme.
+        *args: Ignored positional arguments for compatibility.
+        **kwargs: Ignored keyword arguments for compatibility.
+
+    Returns:
+        Tuple `(c_mat, j_mat, boundaries, types)` where:
+        - `c_mat` is the connectivity probability matrix.
+        - `j_mat` is the synaptic strength matrix.
+        - `boundaries` are cluster boundary indices.
+        - `types` maps population labels to index ranges.
+    """
     n_inhibitory = n_neurons - n_excitatory
 
     n_clustered_neurons = n_neurons - n_excitatory_background - n_inhibitory_background
@@ -93,6 +117,17 @@ def setup_matrices(
 
 @lru_cache(4)
 def depress_formula(f_a, f_b, p, jab):
+    """Compute depression factor for potentiated synapses.
+
+    Args:
+        f_a: Fraction of population A.
+        f_b: Fraction of population B.
+        p: Number of clusters.
+        jab: Potentiated synaptic strength.
+
+    Returns:
+        Multiplicative depression factor.
+    """
     try:
         nominator = f_a + f_b - f_a * f_b * (p + jab)
         denominator = f_a + f_b - f_a * f_b * (p + 1.)

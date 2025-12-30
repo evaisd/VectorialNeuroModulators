@@ -1,3 +1,4 @@
+"""Base stager definitions for simulation execution."""
 
 from io import BytesIO
 from pathlib import Path

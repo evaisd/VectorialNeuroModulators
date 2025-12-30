@@ -1,3 +1,4 @@
+"""Base classes for parameter sweep execution."""
 
 import yaml
 from abc import ABC, abstractmethod
@@ -87,7 +88,7 @@ class _BaseSweepRunner(ABC):
             if perturbation:
                 rate_perturbation = self._get_perturbation()
                 kwargs.update({"rate_perturbation": rate_perturbation.T})
-            self.logger.info(f"Running sweep step {i + 1}/{total_steps} with {param}={sweep_param}.")
+            self.logger.info(f"Running sweep step {i + 1}/{total_steps} for {' '.join(param)}.")
             results.append(self._step(param, i, sweep_param, **kwargs))
             config_path = self._dirs['configs'].joinpath(f"{i}.yaml")
             with open(config_path, 'w') as f:

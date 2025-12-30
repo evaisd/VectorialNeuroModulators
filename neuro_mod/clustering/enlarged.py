@@ -1,3 +1,4 @@
+"""Clustered connectivity matrix construction utilities."""
 
 import numpy as np
 
@@ -12,41 +13,31 @@ def generate_clustered_weight_matrix(
         n_inhibitory_background: int = 0,
         types: dict[int, tuple[int, int]] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Generates a clustered m x m weight matrix for a spiking neuron model.
+    """Generate a clustered weight matrix for spiking neuron models.
 
-    Note: The standard convention W[i, j] is used, representing the connection
-    strength from neuron j (pre-synaptic) to neuron i (post-synaptic).
+    Note:
+        The convention `W[i, j]` is used to represent the connection strength
+        from neuron `j` (pre-synaptic) to neuron `i` (post-synaptic).
 
     Args:
-        n_neurons (int): Total number of neurons.
-        boundaries (list[float]): the boundaries of each cluster.
-        synaptic_strengths (list[list[float]]): A C x C matrix (list of lists)
-            where extra_strengths[i][j] is the synaptic strength
-            from cluster i (pre) to cluster j (post).
-        connectivity (list[list[float]]): A C x C matrix (list of lists)
-            the probability of a connection of a neuron from cluster i (pre) to cluster j (post) to form.
-        random_generator (Optional[numpy.random.Generator], optional): Numpy random generator object.
-         Defaults to None.
-        n_excitatory_background (Optional[int], optional): Number of background excitatory
-         neurons. Defaults to 0.
-            number generator for reproducibility. Defaults to None.
-        n_inhibitory_background (Optional[int], optional): Number of background inhibitory
-         neurons. Defaults to 0.
-        types (dict[int, str], optional): Dictionary of boundaries of the cluster types. Defaults to None
+        n_neurons: Total number of neurons.
+        boundaries: Cluster boundary indices, length `C + 1`.
+        synaptic_strengths: `(C, C)` matrix of synaptic strengths where
+            `synaptic_strengths[i, j]` is from cluster `i` (pre) to `j` (post).
+        connectivity: `(C, C)` matrix of connection probabilities.
+        random_generator: Optional NumPy random generator.
+        n_excitatory_background: Number of background excitatory neurons.
+        n_inhibitory_background: Number of background inhibitory neurons.
+        types: Optional cluster type boundaries (unused, for compatibility).
 
     Returns:
-        tuple[np.ndarray, np.ndarray]:
-        - W (np.ndarray): The m x m weight matrix. W[i, j] is the
-                          connection from j (pre) to i (post).
-        - cluster_boundaries (np.ndarray): An array of shape (C, 2)
-            where each row is the [start, end) index for a cluster.
+        A tuple `(weights, cluster_vec)` where:
+        - `weights` is the `(n_neurons, n_neurons)` weight matrix.
+        - `cluster_vec` assigns each neuron to its cluster id.
 
     Raises:
-        ValueError: If inputs are invalid (e.g., fractions don't sum to 1,
-                    list lengths don't match C).
-
-
+        ValueError: If `connectivity` or `synaptic_strengths` do not match
+            the expected `(n_clusters, n_clusters)` shape.
     """
 
     # --- 0. Set random seed for reproducibility ---

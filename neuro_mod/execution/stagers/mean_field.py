@@ -1,3 +1,4 @@
+"""Stagers for mean-field simulations."""
 
 from abc import ABC
 from pathlib import Path
@@ -58,6 +59,7 @@ class _BaseMeanFieldStager(_Stager, ABC):
 
 
 class FullMeanFieldStager(_BaseMeanFieldStager):
+    """Run full mean-field fixed-point simulations."""
 
     def _plot(self, *args, **kwargs):
         pass
@@ -66,6 +68,13 @@ class FullMeanFieldStager(_BaseMeanFieldStager):
                  config: str | Path | bytes,
                  random_seed: int = None,
                  **kwargs):
+        """Initialize the full mean-field stager.
+
+        Args:
+            config: Path, string, or bytes for the YAML config.
+            random_seed: Optional random seed.
+            **kwargs: Extra parameters forwarded to the base stager.
+        """
         super().__init__(config, random_seed, **kwargs)
 
     def run(self,
@@ -73,6 +82,17 @@ class FullMeanFieldStager(_BaseMeanFieldStager):
             n_runs: int = 100,
             *args,
             **kwargs):
+        """Solve mean-field fixed points from multiple initial conditions.
+
+        Args:
+            nu_init: Optional initial rates; if None, random initializations.
+            n_runs: Number of random initializations.
+            *args: Ignored positional arguments.
+            **kwargs: Ignored keyword arguments.
+
+        Returns:
+            Dictionary with fixed points and corresponding initializations.
+        """
         self.logger.info(f"Running full mean-field simulation with {n_runs} runs.")
         if nu_init is None:
             nu_init = self._draw_nu_inits(n_runs)
@@ -113,6 +133,7 @@ class FullMeanFieldStager(_BaseMeanFieldStager):
 
 
 class ReducedMeanFieldStager(_BaseMeanFieldStager):
+    """Run reduced mean-field simulations over a grid."""
 
     def _plot(
             self,
@@ -129,12 +150,29 @@ class ReducedMeanFieldStager(_BaseMeanFieldStager):
                  config: Path | str | bytes,
                  random_seed: int = None,
                  **kwargs):
+        """Initialize the reduced mean-field stager.
+
+        Args:
+            config: Path, string, or bytes for the YAML config.
+            random_seed: Optional random seed.
+            **kwargs: Extra parameters forwarded to the base stager.
+        """
         super().__init__(config, random_seed, **kwargs)
 
     def run(self,
             focus_pops: list[int],
             grid_density: float = .5,
             grid_lims: tuple[float, float] | list[tuple[float, float]] = (0., 60.),):
+        """Compute reduced mean-field flow on a grid.
+
+        Args:
+            focus_pops: Indices of populations to focus on.
+            grid_density: Step size for the grid.
+            grid_lims: Limits for grid axes.
+
+        Returns:
+            Dictionary containing grid, force field, and potentials.
+        """
         self.logger.info("Running reduced mean-field simulation.")
         from neuro_mod.mean_field.analysis.logic import integration as ing
         nu_vecs = self._gen_grid_vecs(focus_pops, grid_density, grid_lims)

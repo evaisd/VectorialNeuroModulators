@@ -1,3 +1,5 @@
+"""Repeatable simulation runner with seed management."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,6 +28,20 @@ class Repeater:
         save_fn: Callable[[dict, int, Any], None] | None = None,
         logger: Logger | None = None,
     ) -> None:
+        """Initialize the repeater.
+
+        Args:
+            n_repeats: Number of repetitions or None to infer from seeds.
+            save_dir: Directory to store outputs.
+            stager_factory: Callable that creates a stager for a seed.
+            config: Optional config path for metadata copy.
+            seed: Base seed for generating repeat seeds.
+            seeds_file: Optional file with pre-generated seeds.
+            load_saved_seeds: Whether to load seeds from `save_dir`.
+            run_fn: Optional function that runs a stager.
+            save_fn: Optional function that saves outputs.
+            logger: Optional logger instance.
+        """
         self.save_dir = Path(save_dir)
         self.config = config
         self.seed = seed
@@ -43,6 +59,7 @@ class Repeater:
         self._store_meta()
 
     def run(self) -> None:
+        """Execute all repeats."""
         self.logger.info(f"Running {self.n_repeats} repeats.")
         for idx, seed in enumerate(self.seeds):
             self._step(seed=seed, idx=idx)

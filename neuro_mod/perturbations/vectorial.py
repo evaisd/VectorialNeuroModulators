@@ -1,11 +1,28 @@
+"""Vector-based perturbation generator for clustered models."""
 
 import numpy as np
 from neuro_mod.perturbations._base import BasePerturbator
 
 
 class VectorialPerturbation(BasePerturbator):
+    """Generate perturbations as linear combinations of basis vectors."""
 
     def __init__(self, *vectors, **kwargs):
+        """Initialize vectors and masks for perturbation generation.
+
+        Args:
+            *vectors: Optional basis vectors to use. If omitted, random or
+                structured vectors are generated based on kwargs.
+            **kwargs: Configuration for vector generation.
+                n_vectors: Number of basis vectors.
+                length: Length of each vector.
+                structured: Whether to use structured +/-1 vectors.
+                involved_clusters: Indices to include per vector.
+                sigma: Std dev for unstructured random values.
+                mean: Mean for unstructured random values.
+                balance: Probability of +1 for structured vectors.
+                rng: Optional NumPy random generator.
+        """
         super().__init__(**kwargs)
 
         self.n_vectors = kwargs.get('n_vectors', len(vectors))
@@ -68,6 +85,16 @@ class VectorialPerturbation(BasePerturbator):
                         self.vectors[i, involved_entries[i]] = values
 
     def get_perturbation(self, *params: float, **kwargs):
+        """Combine basis vectors using the provided coefficients.
+
+        Args:
+            *params: Coefficients for each vector (length must equal
+                `n_vectors`).
+            **kwargs: Ignored keyword arguments for compatibility.
+
+        Returns:
+            A perturbation vector of shape `(length,)`.
+        """
         assert len(params) == self.n_vectors
         return np.dot(self.vectors.T, np.asarray(params))
 

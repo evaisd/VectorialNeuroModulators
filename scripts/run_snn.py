@@ -1,5 +1,5 @@
 
-import os
+import argparse
 from pathlib import Path
 
 from neuro_mod.execution import Repeater
@@ -7,23 +7,66 @@ from neuro_mod.execution.stagers import StageSNNSimulation
 from neuro_mod.execution.helpers import Logger
 from neuro_mod.spiking_neuron_net.analysis.analyzer import Analyzer
 
+def _build_parser(root: Path) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run an SNN test simulation.")
+    parser.add_argument(
+        "--config",
+        default=str(root / "configs/snn_test_run.yaml"),
+        help="Path to the YAML config file.",
+    )
+    parser.add_argument(
+        "--save-dir",
+        default=str(root / "simulations/snn_test_run"),
+        help="Output directory for simulation artifacts.",
+    )
+    parser.add_argument(
+        "--n-repeats",
+        type=int,
+        default=1,
+        help="Number of repeats to run.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=256,
+        help="Seed for reproducible repeat selection.",
+    )
+    parser.add_argument(
+        "--seeds-file",
+        default=None,
+        help="Optional path to a seeds.txt file.",
+    )
+    parser.add_argument(
+        "--load-saved-seeds",
+        action="store_true",
+        help="Load seeds from a prior run if available.",
+    )
+    return parser
+
+
 def main():
-    wd = Path(next(p for p in Path().resolve().parents if p.name == 'VectorialNeuroModulators'))
-    os.chdir(wd)
-    save_dir = Path('simulations/snn_test_run_2')
+    root = Path(__file__).resolve().parents[1]
+    args = _build_parser(root).parse_args()
+    config = Path(args.config)
+    save_dir = Path(args.save_dir)
+    if not config.is_absolute():
+        config = root / config
+    if not save_dir.is_absolute():
+        save_dir = root / save_dir
     logger = Logger(name="Repeater")
-    config = "configs/snn_test_run.yaml"
     repeater = Repeater(
-        n_repeats=2,
+        n_repeats=args.n_repeats,
         config=config,
         save_dir=save_dir,
         logger=logger,
+        seed=args.seed,
+        seeds_file=args.seeds_file,
+        load_saved_seeds=args.load_saved_seeds,
         stager_factory=lambda seed: StageSNNSimulation(
             config,
             random_seed=seed,
             logger=logger,
         ),
-        seeds_file='simulations/snn_test_run_1/metadata/seeds.txt'
     )
     repeater.run()
     repeater.logger.info("Building analyzer and saving analysis.")

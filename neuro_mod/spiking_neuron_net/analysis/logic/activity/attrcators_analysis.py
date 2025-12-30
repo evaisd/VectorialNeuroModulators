@@ -1,8 +1,17 @@
+"""Attractor extraction and transition analysis utilities."""
 
 import numpy as np
 
 
 def get_unique_attractors(activity_matrix: np.ndarray,):
+    """Find unique overlapping activity patterns across time.
+
+    Args:
+        activity_matrix: Boolean activity matrix `(n_clusters, T)`.
+
+    Returns:
+        Sorted list of tuples describing co-active cluster indices.
+    """
 
     rows, cols = activity_matrix.shape
 
@@ -56,6 +65,16 @@ def extract_attractors(
         minimal_time_ms: int,
         dt_ms: float = .5,
 ):
+    """Extract attractor states and their occurrences from activity traces.
+
+    Args:
+        activity_matrix: Boolean activity matrix `(n_clusters, T)`.
+        minimal_time_ms: Minimum duration for a state to count (ms).
+        dt_ms: Time step in milliseconds.
+
+    Returns:
+        Mapping from attractor identity tuples to summary dictionaries.
+    """
     minimal_time = minimal_time_ms // dt_ms
     changes = np.any(activity_matrix[:, 1:] != activity_matrix[:, :-1], axis=0)
     bounds = np.concatenate(([0], np.where(changes)[0] + 1, [activity_matrix.shape[1]]))
@@ -105,6 +124,14 @@ def extract_attractors(
 def get_transition_matrix(
         attractors_data: dict,
 ):
+    """Compute transition probabilities between attractors.
+
+    Args:
+        attractors_data: Mapping of attractor identities to summaries.
+
+    Returns:
+        Transition probability matrix `(n_states, n_states)`.
+    """
     keys = sorted(attractors_data)
     key_to_row = {k: i for i, k in enumerate(keys)}
     n = len(keys)
@@ -140,6 +167,16 @@ def get_transition_counts(
         key_to_row: dict,
         n: int,
 ):
+    """Compute transition counts and occurrences for a session.
+
+    Args:
+        attractors_data: Attractor summaries for a session.
+        key_to_row: Mapping from attractor identities to row indices.
+        n: Number of unique attractors.
+
+    Returns:
+        Tuple `(counts, occurrences)` for transitions and occurrences.
+    """
     times = []
     labels = []
     occ = np.zeros(n, dtype=float)
@@ -170,6 +207,15 @@ def get_transition_matrix_session_aware(
         attractors_data: dict,
         session_attractors: list[dict],
 ):
+    """Compute transition probabilities across multiple sessions.
+
+    Args:
+        attractors_data: Merged attractor summaries.
+        session_attractors: Per-session attractor summaries.
+
+    Returns:
+        Transition probability matrix `(n_states, n_states)`.
+    """
     if not attractors_data:
         return np.zeros((0, 0), dtype=float)
     keys = sorted(attractors_data)

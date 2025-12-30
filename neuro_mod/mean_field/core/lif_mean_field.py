@@ -1,3 +1,4 @@
+"""Mean-field LIF model implementation for clustered networks."""
 
 import numpy as np
 from neuro_mod.mean_field.core import logic
@@ -58,6 +59,23 @@ class LIFMeanField:
             *args,
             **kwargs
     ):
+        """Initialize the mean-field model parameters.
+
+        Args:
+            n_clusters: Number of clusters.
+            c_matrix: Connectivity matrix.
+            j_matrix: Synaptic efficacy matrix.
+            j_ext: External synaptic efficacies.
+            c_ext: External in-degrees.
+            nu_ext: External input rates.
+            tau_membrane: Membrane time constants.
+            tau_synaptic: Synaptic time constants.
+            threshold: Firing thresholds.
+            reset_voltage: Reset voltages.
+            tau_refractory: Refractory period in seconds.
+            *args: Ignored positional arguments.
+            **kwargs: Ignored keyword arguments.
+        """
         self.n_clusters = int(n_clusters)
         self.n_populations = j_matrix.shape[0]
         self.j_mat = np.asarray(j_matrix, dtype=float)
@@ -152,6 +170,14 @@ class LIFMeanField:
             self,
             nu_init: np.ndarray | None = None,
     ):
+        """Solve for fixed-point firing rates.
+
+        Args:
+            nu_init: Optional initial guess for rates.
+
+        Returns:
+            SciPy optimization result from `scipy.optimize.root`.
+        """
         from scipy.optimize import root
         nu_init = np.zeros(self.n_populations) if nu_init is None else np.asarray(nu_init, float)
         self._nu = nu_init
@@ -166,6 +192,15 @@ class LIFMeanField:
         return sol
 
     def determine_stability(self, nu_star: np.ndarray):
+        """Determine stability of a fixed point.
+
+        Args:
+            nu_star: Fixed-point rates to evaluate.
+
+        Returns:
+            Tuple `(fp_type, eigvals)` as returned by
+            `neuro_mod.mean_field.core.logic.determine_stability`.
+        """
         return logic.determine_stability(nu_star, self._fixed_point_residual)
 
     def _fixed_point_residual(
@@ -187,6 +222,15 @@ class LIFMeanField:
             focus_pops: list[int],
             nu_init: np.ndarray = None,
     ):
+        """Compute effective response for a subset of populations.
+
+        Args:
+            focus_pops: Population indices to treat as dynamic.
+            nu_init: Initial rates for all populations.
+
+        Returns:
+            Effective response rates for the focus populations.
+        """
         if nu_init is None:
             nu_init = np.zeros(self.n_populations)
         nu_bar = nu_init.copy()

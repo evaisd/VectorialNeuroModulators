@@ -1,3 +1,4 @@
+"""Activity detection utilities for spiking network outputs."""
 
 import numpy as np
 
@@ -7,6 +8,16 @@ def get_activity(
         baseline_rate: float | np.ndarray = None,
         flag: bool = False,
 ):
+    """Determine active clusters based on firing rates.
+
+    Args:
+        firing_rates: Array of firing rates per cluster over time.
+        baseline_rate: Optional baseline rate for comparison.
+        flag: Internal recursion flag.
+
+    Returns:
+        Boolean activity matrix of the same shape as `firing_rates`.
+    """
     if isinstance(baseline_rate, float):
         baseline_rate = np.full(firing_rates.shape[0], baseline_rate)
     baseline_rate = firing_rates[:].mean(axis=(1,)) if baseline_rate is None else baseline_rate
@@ -24,6 +35,16 @@ def smooth_cluster_activity(
         minimal_length_ms: float = 100.,
         dt_ms: float = .5
 ):
+    """Fill short gaps in binary activity traces.
+
+    Args:
+        activity_matrix: Boolean activity array `(n_clusters, T)`.
+        minimal_length_ms: Minimum gap length to keep (ms).
+        dt_ms: Time step in milliseconds.
+
+    Returns:
+        Smoothed activity matrix.
+    """
     out = activity_matrix.copy()
     minimal_length = minimal_length_ms // dt_ms
 

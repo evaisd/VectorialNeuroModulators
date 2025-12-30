@@ -1,3 +1,4 @@
+"""Plotting utilities for spiking network analysis."""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,6 +9,19 @@ def gen_raster_plot(spikes: np.ndarray,
                     n_neurons: int,
                     *pops,
                     **kwargs):
+    """Generate a spike raster plot.
+
+    Args:
+        spikes: Boolean spike matrix `(T, n_neurons)`.
+        delta_t: Time step in seconds.
+        duration_sec: Total duration in seconds.
+        n_neurons: Number of neurons.
+        *pops: Population boundary indices (exc, exc_bkg, inh_bkg).
+        **kwargs: Ignored keyword arguments for compatibility.
+
+    Returns:
+        Matplotlib figure with the raster plot.
+    """
     times, neurons = spikes.nonzero()
     fig, ax = plt.subplots(figsize=(16, 8))
     ax.scatter(times * delta_t, neurons, s=0.1, color='black')  # each spike = one dot
