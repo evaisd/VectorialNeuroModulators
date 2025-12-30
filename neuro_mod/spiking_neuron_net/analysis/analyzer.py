@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import json
 from functools import lru_cache
 import logging
 
@@ -175,6 +176,111 @@ class Analyzer:
             probs.append(duration / self.total_sim_duration_ms)
         return np.stack(probs, axis=0)
 
+    def get_num_states(self) -> int:
+        return len(self.attractors_data)
+
+    def get_life_spans(self):
+        num_states = self.get_num_states()
+        return self.get_mean_lifespan(*range(num_states))
+
+    def get_occurrences(self) -> np.ndarray:
+        att = self.attractors_data
+        return np.array([v["#"] for v in att.values()])
+
+    def get_num_clusters(self) -> np.ndarray:
+        att = self.attractors_data
+        return np.array([len(k) for k in att.keys()])
+
+    def get_attractor_probs(self) -> np.ndarray:
+        num_states = self.get_num_states()
+        return np.array([self.get_attractor_prob(*range(num_states))]).flatten()
+
+    def save_analysis(
+            self,
+            folder: str | Path,
+            *,
+            attractors_filename: str = "attractors.npy",
+            transition_filename: str = "transition_matrix.npy",
+            config_filename: str = "analysis_config.json",
+    ) -> Path:
+        self.logger.info("Saving analysis artifacts.")
+        folder_path = Path(folder)
+        folder_path.mkdir(parents=True, exist_ok=True)
+        attractors_path = folder_path / attractors_filename
+        transition_path = folder_path / transition_filename
+        config_path = folder_path / config_filename
+
+        np.save(attractors_path, self.attractors_data, allow_pickle=True)
+        np.save(transition_path, self.get_transition_matrix())
+
+        config = {
+            "spikes_path": str(self.spikes_path),
+            "clusters_path": str(self.clusters_path) if self.clusters_path is not None else None,
+            "dt": self.dt,
+            "minimal_life_span_ms": self._minimal_life_span_ms,
+            "clustering_params": self._clustering_params,
+            "session_length": self.session_length,
+            "total_sim_duration_ms": self.total_sim_duration_ms,
+            "files": {
+                "attractors": attractors_filename,
+                "transition_matrix": transition_filename,
+            },
+        }
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True))
+        self.logger.info(
+            "Analysis saved.",
+            extra={
+                "analysis_dir": str(folder_path),
+                "attractors_file": str(attractors_path),
+                "transition_file": str(transition_path),
+                "config_file": str(config_path),
+            },
+        )
+        return folder_path
+
+    @classmethod
+    def load_analysis(
+            cls,
+            folder: str | Path,
+            *,
+            config_filename: str = "analysis_config.json",
+    ) -> "Analyzer":
+        folder_path = Path(folder)
+        config_path = folder_path / config_filename
+        config = json.loads(config_path.read_text())
+
+        files = config.get("files", {})
+        attractors_path = folder_path / files.get("attractors", "attractors.npy")
+        transition_path = folder_path / files.get("transition_matrix", "transition_matrix.npy")
+
+        obj = cls.__new__(cls)
+        obj.spikes_path = Path(config["spikes_path"])
+        obj.clusters_path = (
+            Path(config["clusters_path"])
+            if config.get("clusters_path") is not None
+            else None
+        )
+        obj.dt = float(config["dt"])
+        obj.logger = logging.getLogger(cls.__name__)
+        obj.session_length = int(config.get("session_length", 0))
+        obj.total_sim_duration_ms = float(config.get("total_sim_duration_ms", 0.0))
+        obj._minimal_life_span_ms = float(config.get("minimal_life_span_ms", cls._minimal_life_span_ms))
+        obj._clustering_params = config.get("clustering_params", cls._clustering_params)
+
+        obj.attractors_data = np.load(attractors_path, allow_pickle=True).item()
+        obj._attractor_map = {obj.attractors_data[k]["idx"]: k for k in obj.attractors_data.keys()}
+        obj._transition_matrix = np.load(transition_path)
+        obj.logger.info(
+            "Analysis loaded from disk.",
+            extra={
+                "analysis_dir": str(folder_path),
+                "attractors_file": str(attractors_path),
+                "transition_file": str(transition_path),
+                "config_file": str(config_path),
+            },
+        )
+        return obj
+
     def get_transition_prob(self,
                             idx_or_identity_from: int | tuple[int, ...],
                             idx_or_identity_to: int | tuple[int, ...],
@@ -189,6 +295,8 @@ class Analyzer:
 
     @lru_cache()
     def get_transition_matrix(self) -> np.ndarray:
+        if hasattr(self, "_transition_matrix"):
+            return self._transition_matrix
         session_attractors = self._get_session_attractors_data(self._minimal_life_span_ms)
         return activity.get_transition_matrix_session_aware(
             self.attractors_data,
@@ -298,23 +406,61 @@ class Analyzer:
         dt_ms = self.dt * 1e3
         time_steps = int(np.floor(time_ms / dt_ms))
         minimal_time_ms = kwargs.pop('minimal_time_ms', self._minimal_life_span_ms)
-        first_times = self._get_transition_pair_first_time_steps(
-            minimal_time_ms,
-            **kwargs,
-        )
-        if first_times.size == 0:
+        session_attractors = self._get_session_attractors_data(minimal_time_ms, **kwargs)
+        if not session_attractors:
             return 0.0
-        nonzero = int(np.count_nonzero(first_times <= time_steps))
-        n_attractors = self.get_unique_attractors_count_until_time(
-            time_ms,
-            minimal_time_ms=minimal_time_ms,
-            **kwargs,
-        )
-        total_entries = n_attractors * n_attractors
+        session_lengths = self._get_session_lengths_steps(**kwargs)
+        offsets = np.cumsum([0] + session_lengths[:-1])
+        identities = set()
+        for session_data, offset in zip(session_attractors, offsets):
+            local_limit = time_steps - offset
+            if local_limit < 0:
+                continue
+            for identity, entry in session_data.items():
+                starts = np.asarray(entry.get("starts", []))
+                if starts.size == 0:
+                    continue
+                if np.any(starts <= local_limit):
+                    identities.add(identity)
+        if not identities:
+            return 0.0
+        keys = sorted(identities)
+        key_to_row = {k: i for i, k in enumerate(keys)}
+        n = len(keys)
+        counts = np.zeros((n, n), dtype=int)
+        for session_data, offset in zip(session_attractors, offsets):
+            local_limit = time_steps - offset
+            if local_limit < 0:
+                continue
+            times = []
+            labels = []
+            for identity, entry in session_data.items():
+                row = key_to_row.get(identity)
+                if row is None:
+                    continue
+                starts = np.asarray(entry.get("starts", []))
+                if starts.size == 0:
+                    continue
+                mask = starts <= local_limit
+                if not np.any(mask):
+                    continue
+                starts = starts[mask]
+                times.append(starts)
+                labels.append(np.full(starts.size, row, dtype=int))
+            if not times:
+                continue
+            times = np.concatenate(times)
+            labels = np.concatenate(labels)
+            order = np.argsort(times)
+            labels = labels[order]
+            if labels.size > 1:
+                src = labels[:-1]
+                dst = labels[1:]
+                np.add.at(counts, (src, dst), 1)
+        total_entries = counts.size
         if total_entries == 0:
             return 0.0
-        return nonzero / total_entries
-
+        return float(np.count_nonzero(counts) / total_entries)
     def get_sequence_probability(
             self,
             *idx_or_identity: int | tuple[int, ...],
