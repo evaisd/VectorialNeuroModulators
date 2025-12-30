@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 from neuro_mod.execution.stagers import StageSNNSimulation
 from neuro_mod.execution.helpers import Logger
+from neuro_mod.spiking_neuron_net.analysis.analyzer import Analyzer
 
 
 class Repeater():
@@ -64,6 +65,10 @@ def main():
     save_dir = Path('simulations/repeated_test')
     repeater = Repeater(n_repeats=2, config="configs/snn_long_run.yaml", save_dir=save_dir)
     repeater.run()
+    repeater.logger.info("Building analyzer and saving analysis.")
+    analyzer = Analyzer(save_dir / "data", clusters=save_dir / "clusters.npy")
+    analyzer.save_analysis(save_dir / "analysis")
+    repeater.logger.info("Analysis generation complete.")
 
 
 if __name__ == "__main__":

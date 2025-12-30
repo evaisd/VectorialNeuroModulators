@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import json
 from functools import lru_cache
 import logging
 
@@ -175,6 +176,111 @@ class Analyzer:
             probs.append(duration / self.total_sim_duration_ms)
         return np.stack(probs, axis=0)
 
+    def get_num_states(self) -> int:
+        return len(self.attractors_data)
+
+    def get_life_spans(self):
+        num_states = self.get_num_states()
+        return self.get_mean_lifespan(*range(num_states))
+
+    def get_occurrences(self) -> np.ndarray:
+        att = self.attractors_data
+        return np.array([v["#"] for v in att.values()])
+
+    def get_num_clusters(self) -> np.ndarray:
+        att = self.attractors_data
+        return np.array([len(k) for k in att.keys()])
+
+    def get_attractor_probs(self) -> np.ndarray:
+        num_states = self.get_num_states()
+        return np.array([self.get_attractor_prob(*range(num_states))]).flatten()
+
+    def save_analysis(
+            self,
+            folder: str | Path,
+            *,
+            attractors_filename: str = "attractors.npy",
+            transition_filename: str = "transition_matrix.npy",
+            config_filename: str = "analysis_config.json",
+    ) -> Path:
+        self.logger.info("Saving analysis artifacts.")
+        folder_path = Path(folder)
+        folder_path.mkdir(parents=True, exist_ok=True)
+        attractors_path = folder_path / attractors_filename
+        transition_path = folder_path / transition_filename
+        config_path = folder_path / config_filename
+
+        np.save(attractors_path, self.attractors_data, allow_pickle=True)
+        np.save(transition_path, self.get_transition_matrix())
+
+        config = {
+            "spikes_path": str(self.spikes_path),
+            "clusters_path": str(self.clusters_path) if self.clusters_path is not None else None,
+            "dt": self.dt,
+            "minimal_life_span_ms": self._minimal_life_span_ms,
+            "clustering_params": self._clustering_params,
+            "session_length": self.session_length,
+            "total_sim_duration_ms": self.total_sim_duration_ms,
+            "files": {
+                "attractors": attractors_filename,
+                "transition_matrix": transition_filename,
+            },
+        }
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True))
+        self.logger.info(
+            "Analysis saved.",
+            extra={
+                "analysis_dir": str(folder_path),
+                "attractors_file": str(attractors_path),
+                "transition_file": str(transition_path),
+                "config_file": str(config_path),
+            },
+        )
+        return folder_path
+
+    @classmethod
+    def load_analysis(
+            cls,
+            folder: str | Path,
+            *,
+            config_filename: str = "analysis_config.json",
+    ) -> "Analyzer":
+        folder_path = Path(folder)
+        config_path = folder_path / config_filename
+        config = json.loads(config_path.read_text())
+
+        files = config.get("files", {})
+        attractors_path = folder_path / files.get("attractors", "attractors.npy")
+        transition_path = folder_path / files.get("transition_matrix", "transition_matrix.npy")
+
+        obj = cls.__new__(cls)
+        obj.spikes_path = Path(config["spikes_path"])
+        obj.clusters_path = (
+            Path(config["clusters_path"])
+            if config.get("clusters_path") is not None
+            else None
+        )
+        obj.dt = float(config["dt"])
+        obj.logger = logging.getLogger(cls.__name__)
+        obj.session_length = int(config.get("session_length", 0))
+        obj.total_sim_duration_ms = float(config.get("total_sim_duration_ms", 0.0))
+        obj._minimal_life_span_ms = float(config.get("minimal_life_span_ms", cls._minimal_life_span_ms))
+        obj._clustering_params = config.get("clustering_params", cls._clustering_params)
+
+        obj.attractors_data = np.load(attractors_path, allow_pickle=True).item()
+        obj._attractor_map = {obj.attractors_data[k]["idx"]: k for k in obj.attractors_data.keys()}
+        obj._transition_matrix = np.load(transition_path)
+        obj.logger.info(
+            "Analysis loaded from disk.",
+            extra={
+                "analysis_dir": str(folder_path),
+                "attractors_file": str(attractors_path),
+                "transition_file": str(transition_path),
+                "config_file": str(config_path),
+            },
+        )
+        return obj
+
     def get_transition_prob(self,
                             idx_or_identity_from: int | tuple[int, ...],
                             idx_or_identity_to: int | tuple[int, ...],
@@ -189,6 +295,8 @@ class Analyzer:
 
     @lru_cache()
     def get_transition_matrix(self) -> np.ndarray:
+        if hasattr(self, "_transition_matrix"):
+            return self._transition_matrix
         session_attractors = self._get_session_attractors_data(self._minimal_life_span_ms)
         return activity.get_transition_matrix_session_aware(
             self.attractors_data,
