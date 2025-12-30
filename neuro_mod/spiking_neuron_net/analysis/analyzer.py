@@ -189,20 +189,11 @@ class Analyzer:
 
     @lru_cache()
     def get_transition_matrix(self) -> np.ndarray:
-        if not self.attractors_data:
-            return np.zeros((0, 0), dtype=float)
-        keys = sorted(self.attractors_data)
-        key_to_row = {k: i for i, k in enumerate(keys)}
-        n = len(keys)
-        total_counts = np.zeros((n, n), dtype=float)
-        total_occ = np.zeros(n, dtype=float)
         session_attractors = self._get_session_attractors_data(self._minimal_life_span_ms)
-        for attractors_data in session_attractors:
-            counts, occ = self._get_transition_counts(attractors_data, key_to_row, n)
-            total_counts += counts
-            total_occ += occ
-        total_occ[total_occ == 0] = 1.0
-        return total_counts / total_occ[:, None]
+        return activity.get_transition_matrix_session_aware(
+            self.attractors_data,
+            session_attractors,
+        )
 
     def _files_walker(self):
         if self.spikes_path.is_file():
@@ -315,29 +306,3 @@ class Analyzer:
                 merged_entry["occurrence_durations"].extend(entry["occurrence_durations"])
                 merged_entry["total_duration"] += entry["total_duration"]
         return merged
-
-    def _get_transition_counts(self, attractors_data, key_to_row, n):
-        times = []
-        labels = []
-        occ = np.zeros(n, dtype=float)
-        for identity, row in key_to_row.items():
-            entry = attractors_data.get(identity)
-            if entry is None:
-                continue
-            occ[row] = entry["#"]
-            starts = np.asarray(entry["starts"])
-            if starts.size == 0:
-                continue
-            times.append(starts)
-            labels.append(np.full(starts.size, row, dtype=int))
-        counts = np.zeros((n, n), dtype=float)
-        if times:
-            times = np.concatenate(times)
-            labels = np.concatenate(labels)
-            order = np.argsort(times)
-            labels = labels[order]
-            if labels.size > 1:
-                src = labels[:-1]
-                dst = labels[1:]
-                np.add.at(counts, (src, dst), 1.0)
-        return counts, occ
