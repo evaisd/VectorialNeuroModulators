@@ -207,6 +207,113 @@ class Analyzer:
         attractors = set(list(self.attractors_data.keys()))
         return attractors
 
+    @lru_cache()
+    def _get_unique_attractor_first_start_steps(
+            self,
+            minimal_time_ms: float,
+            **kwargs,
+    ) -> np.ndarray:
+        session_attractors = self._get_session_attractors_data(minimal_time_ms, **kwargs)
+        session_lengths = self._get_session_lengths_steps(**kwargs)
+        offsets = np.cumsum([0] + session_lengths[:-1])
+        first_starts = {}
+        for session_data, offset in zip(session_attractors, offsets):
+            for identity, entry in session_data.items():
+                starts = entry.get("starts", [])
+                if not starts:
+                    continue
+                global_start = offset + min(starts)
+                prev = first_starts.get(identity)
+                if prev is None or global_start < prev:
+                    first_starts[identity] = global_start
+        if not first_starts:
+            return np.empty((0,), dtype=int)
+        return np.fromiter(first_starts.values(), dtype=int, count=len(first_starts))
+
+    @lru_cache()
+    def _get_transition_pair_first_time_steps(
+            self,
+            minimal_time_ms: float,
+            **kwargs,
+    ) -> np.ndarray:
+        session_attractors = self._get_session_attractors_data(minimal_time_ms, **kwargs)
+        session_lengths = self._get_session_lengths_steps(**kwargs)
+        offsets = np.cumsum([0] + session_lengths[:-1])
+        first_times = {}
+        for session_data, offset in zip(session_attractors, offsets):
+            times = []
+            labels = []
+            for identity, entry in session_data.items():
+                starts = np.asarray(entry.get("starts", []))
+                if starts.size == 0:
+                    continue
+                times.append(starts)
+                labels.extend([identity] * starts.size)
+            if not times:
+                continue
+            times = np.concatenate(times)
+            labels = np.array(labels, dtype=object)
+            order = np.argsort(times)
+            times = times[order]
+            labels = labels[order]
+            if labels.size < 2:
+                continue
+            src = labels[:-1]
+            dst = labels[1:]
+            transition_times = times[1:] + offset
+            for s, d, t in zip(src, dst, transition_times):
+                pair = (s, d)
+                prev = first_times.get(pair)
+                if prev is None or t < prev:
+                    first_times[pair] = int(t)
+        if not first_times:
+            return np.empty((0,), dtype=int)
+        return np.fromiter(first_times.values(), dtype=int, count=len(first_times))
+
+    def get_unique_attractors_count_until_time(
+            self,
+            time_ms: float,
+            **kwargs,
+    ) -> int:
+        if time_ms < 0:
+            raise ValueError("time_ms must be non-negative.")
+        dt_ms = self.dt * 1e3
+        time_steps = int(np.floor(time_ms / dt_ms))
+        minimal_time_ms = kwargs.pop('minimal_time_ms', self._minimal_life_span_ms)
+        first_starts = self._get_unique_attractor_first_start_steps(
+            minimal_time_ms,
+            **kwargs,
+        )
+        if first_starts.size == 0:
+            return 0
+        return int(np.count_nonzero(first_starts <= time_steps))
+
+    def get_transition_density_until_time(
+            self,
+            time_ms: float,
+            **kwargs,
+    ) -> float:
+        if time_ms < 0:
+            raise ValueError("time_ms must be non-negative.")
+        dt_ms = self.dt * 1e3
+        time_steps = int(np.floor(time_ms / dt_ms))
+        minimal_time_ms = kwargs.pop('minimal_time_ms', self._minimal_life_span_ms)
+        first_times = self._get_transition_pair_first_time_steps(
+            minimal_time_ms,
+            **kwargs,
+        )
+        if first_times.size == 0:
+            return 0.0
+        nonzero = int(np.count_nonzero(first_times <= time_steps))
+        n_attractors = self.get_unique_attractors_count_until_time(
+            time_ms,
+            minimal_time_ms=minimal_time_ms,
+            **kwargs,
+        )
+        total_entries = n_attractors * n_attractors
+        if total_entries == 0:
+            return 0.0
+        return nonzero / total_entries
     def get_sequence_probability(
             self,
             *idx_or_identity: int | tuple[int, ...],
