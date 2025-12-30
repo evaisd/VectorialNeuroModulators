@@ -139,7 +139,9 @@ class ReducedMeanFieldStager(_BaseMeanFieldStager):
         from neuro_mod.mean_field.analysis.logic import integration as ing
         nu_vecs = self._gen_grid_vecs(focus_pops, grid_density, grid_lims)
         mesh, nu_outs = self._get_effective_rates_on_grid(focus_pops, *nu_vecs)
-        shape = (mesh.shape[0], mesh.shape[1], mesh.shape[-1])
+        num_focus = len(focus_pops)
+        grid_shape = tuple(len(v) for v in nu_vecs[:num_focus])
+        shape = grid_shape + (mesh.shape[-1],)
         grid = mesh.reshape(shape)[..., :2]
         nu_out_grid = nu_outs.reshape(shape)[..., :2]
         force_field = nu_out_grid - grid
