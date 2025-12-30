@@ -406,61 +406,23 @@ class Analyzer:
         dt_ms = self.dt * 1e3
         time_steps = int(np.floor(time_ms / dt_ms))
         minimal_time_ms = kwargs.pop('minimal_time_ms', self._minimal_life_span_ms)
-        session_attractors = self._get_session_attractors_data(minimal_time_ms, **kwargs)
-        if not session_attractors:
+        first_times = self._get_transition_pair_first_time_steps(
+            minimal_time_ms,
+            **kwargs,
+        )
+        if first_times.size == 0:
             return 0.0
-        session_lengths = self._get_session_lengths_steps(**kwargs)
-        offsets = np.cumsum([0] + session_lengths[:-1])
-        identities = set()
-        for session_data, offset in zip(session_attractors, offsets):
-            local_limit = time_steps - offset
-            if local_limit < 0:
-                continue
-            for identity, entry in session_data.items():
-                starts = np.asarray(entry.get("starts", []))
-                if starts.size == 0:
-                    continue
-                if np.any(starts <= local_limit):
-                    identities.add(identity)
-        if not identities:
-            return 0.0
-        keys = sorted(identities)
-        key_to_row = {k: i for i, k in enumerate(keys)}
-        n = len(keys)
-        counts = np.zeros((n, n), dtype=int)
-        for session_data, offset in zip(session_attractors, offsets):
-            local_limit = time_steps - offset
-            if local_limit < 0:
-                continue
-            times = []
-            labels = []
-            for identity, entry in session_data.items():
-                row = key_to_row.get(identity)
-                if row is None:
-                    continue
-                starts = np.asarray(entry.get("starts", []))
-                if starts.size == 0:
-                    continue
-                mask = starts <= local_limit
-                if not np.any(mask):
-                    continue
-                starts = starts[mask]
-                times.append(starts)
-                labels.append(np.full(starts.size, row, dtype=int))
-            if not times:
-                continue
-            times = np.concatenate(times)
-            labels = np.concatenate(labels)
-            order = np.argsort(times)
-            labels = labels[order]
-            if labels.size > 1:
-                src = labels[:-1]
-                dst = labels[1:]
-                np.add.at(counts, (src, dst), 1)
-        total_entries = counts.size
+        nonzero = int(np.count_nonzero(first_times <= time_steps))
+        n_attractors = self.get_unique_attractors_count_until_time(
+            time_ms,
+            minimal_time_ms=minimal_time_ms,
+            **kwargs,
+        )
+        total_entries = n_attractors * n_attractors
         if total_entries == 0:
             return 0.0
-        return float(np.count_nonzero(counts) / total_entries)
+        return nonzero / total_entries
+
     def get_sequence_probability(
             self,
             *idx_or_identity: int | tuple[int, ...],
