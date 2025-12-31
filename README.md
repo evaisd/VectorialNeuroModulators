@@ -54,6 +54,7 @@ or add the repository root to your `PYTHONPATH` when running scripts.
 - **`configs/`**: Example YAML configuration templates for simulations.
 - **`scripts/`**:
   - `run_snn.py`: Run repeated spiking-net simulations and write analysis artifacts.
+  - `run_perturbed_snn.py`: Run repeated spiking-net simulations with vectorial perturbations.
   - `load_snn_analysis.py`: Load a saved spiking-net analysis folder.
 - **`test_sim/`**: Example output folder (plots and data) from a test run.
 
@@ -105,6 +106,22 @@ python scripts/run_snn.py \
 
 This runs `Repeater` + `StageSNNSimulation`, writes `data/spikes_*.npy`,
 `clusters.npy`, and saves attractor analysis to `analysis/`.
+
+#### Perturbed spiking network runs
+
+Use `scripts/run_perturbed_snn.py` to run repeated simulations with
+vectorial perturbations defined in the config:
+
+```bash
+python scripts/run_perturbed_snn.py \
+  --config configs/perturbed/default_snn_params_with_perturbation.yaml \
+  --save-dir simulations/perturbed_snn \
+  --n-repeats 4
+```
+
+Perturbations are generated in cluster space via `VectorialPerturbation`,
+logged with summary stats, and saved to `metadata/perturbations.npz` for
+reproducibility.
 
 #### Mean-field stagers
 
@@ -159,6 +176,50 @@ sweep.execute(
 
 Each sweep step writes a config snapshot under `configs/` in the sweep output
 directory so runs are reproducible.
+
+#### Perturbation config shape
+
+Perturbations are configured per parameter under `perturbation` in YAML.
+Each block defines vectors, coefficients, optional time dependence, and an
+optional RNG seed:
+
+```yaml
+perturbation:
+  rate:
+    vectors:
+      - [1, 1, -1]
+      - [-1, 1, 1]
+      - [1, -1, 1]
+    involved_clusters:
+      - [0, 1, 2]
+      - [1, 2, 3]
+      - [2, 3, 4]
+    seed: 256
+    params: [0.3, 0.02, 0.2]
+    time_dependence:
+      shape: hat
+      onset_time: 0
+      offset_time:
+  arousal_level:
+    vectors:
+      - [1, 1, -1]
+      - [-1, 1, 1]
+      - [1, -1, 1]
+    involved_clusters:
+      - [0, 1, 2]
+      - [1, 2, 3]
+      - [2, 3, 4]
+    seed: 256
+    params: [0.3, 0.02, 0.2]
+    time_dependence:
+      shape: hat
+      onset_time: 0
+      offset_time:
+```
+
+Supported targets include `rate`, `j_baseline`, `j_potentiated`, `j_ext`,
+`threshold`, `tau_membrane`, `tau_synaptic`, `tau_refractory`, and arousal
+parameters (`arousal_level`, `arousal_L`, `arousal_x_0`, `arousal_k`, `arousal_M`).
 
 #### Spiking-net analyzer
 
