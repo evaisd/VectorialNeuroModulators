@@ -3,8 +3,8 @@ import argparse
 from pathlib import Path
 
 from neuro_mod.execution import Repeater
+from neuro_mod.execution.helpers import Logger, resolve_path, save_cmd
 from neuro_mod.execution.stagers import StageSNNSimulation
-from neuro_mod.execution.helpers import Logger
 from neuro_mod.spiking_neuron_net.analysis.analyzer import Analyzer
 
 def _build_parser(root: Path) -> argparse.ArgumentParser:
@@ -47,12 +47,9 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
 def main():
     root = Path(__file__).resolve().parents[1]
     args = _build_parser(root).parse_args()
-    config = Path(args.config)
-    save_dir = Path(args.save_dir)
-    if not config.is_absolute():
-        config = root / config
-    if not save_dir.is_absolute():
-        save_dir = root / save_dir
+    config = resolve_path(root, args.config)
+    save_dir = resolve_path(root, args.save_dir)
+    save_cmd(save_dir / "metadata")
     logger = Logger(name="Repeater")
     repeater = Repeater(
         n_repeats=args.n_repeats,

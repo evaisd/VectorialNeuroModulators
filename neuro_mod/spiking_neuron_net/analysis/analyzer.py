@@ -672,4 +672,12 @@ class Analyzer:
                 merged_entry["ends"].extend(entry["ends"])
                 merged_entry["occurrence_durations"].extend(entry["occurrence_durations"])
                 merged_entry["total_duration"] += entry["total_duration"]
+        for entry in merged.values():
+            starts = entry["starts"]
+            if len(starts) <= 1:
+                continue
+            order = sorted(range(len(starts)), key=starts.__getitem__)
+            entry["starts"] = [starts[i] for i in order]
+            entry["ends"] = [entry["ends"][i] for i in order]
+            entry["occurrence_durations"] = [entry["occurrence_durations"][i] for i in order]
         return merged
