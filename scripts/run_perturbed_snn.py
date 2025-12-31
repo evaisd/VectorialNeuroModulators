@@ -54,6 +54,15 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
 
 
 def _build_perturbator(config: dict, name: str) -> VectorialPerturbation:
+    """Build a VectorialPerturbation from config for a target parameter.
+
+    Args:
+        config: Full YAML configuration dictionary.
+        name: Perturbation target name under the config.
+
+    Returns:
+        Configured VectorialPerturbation instance.
+    """
     perturbation = dict(config.get("perturbation", {}).get(name, {}))
     vectors = perturbation.pop("vectors", [])
     perturbation.pop("params", None)
@@ -69,6 +78,15 @@ def _build_perturbator(config: dict, name: str) -> VectorialPerturbation:
 
 
 def _get_time_vector(config: dict, name: str) -> np.ndarray | None:
+    """Build a time mask vector for a named perturbation config.
+
+    Args:
+        config: Full YAML configuration dictionary.
+        name: Perturbation target name under the config.
+
+    Returns:
+        Time mask vector or None if not configured.
+    """
     perturbation = config.get("perturbation", {}).get(name, {})
     time_dependence = perturbation.get("time_dependence")
     if not time_dependence or "shape" not in time_dependence:
@@ -85,6 +103,15 @@ def _get_time_vector(config: dict, name: str) -> np.ndarray | None:
 
 
 def _generate_perturbations(config: dict, logger: Logger | None = None) -> dict:
+    """Generate perturbations for all configured targets.
+
+    Args:
+        config: Full YAML configuration dictionary.
+        logger: Optional logger for summary statistics.
+
+    Returns:
+        Dictionary of perturbation arrays keyed by target name.
+    """
     perturbations = {}
     for name, cfg in config.get("perturbation", {}).items():
         if not isinstance(cfg, dict) or "params" not in cfg:

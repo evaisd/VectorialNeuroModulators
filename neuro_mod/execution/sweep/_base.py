@@ -201,6 +201,14 @@ class _BaseSweepRunner(ABC):
         return out
 
     def _get_time_vector(self, config: dict) -> np.ndarray | None:
+        """Build a time mask vector for perturbations.
+
+        Args:
+            config: Perturbation configuration containing time dependence.
+
+        Returns:
+            Time mask vector or None if not configured.
+        """
         time_dependence = config.get("time_dependence")
         if time_dependence is None or "shape" not in time_dependence:
             return None
@@ -214,6 +222,11 @@ class _BaseSweepRunner(ABC):
         return time_vec
 
     def _log_perturbation_summary(self, perturbations: dict):
+        """Log summary statistics for generated perturbations.
+
+        Args:
+            perturbations: Mapping of parameter names to perturbation arrays.
+        """
         for name, values in perturbations.items():
             arr = np.asarray(values, dtype=float)
             self.logger.info(
@@ -222,6 +235,12 @@ class _BaseSweepRunner(ABC):
             )
 
     def _save_perturbations(self, perturbations: dict, idx: int):
+        """Persist perturbations for reproducibility.
+
+        Args:
+            perturbations: Mapping of parameter names to perturbation arrays.
+            idx: Sweep index for naming the output file.
+        """
         if not self._dirs.get("metadata"):
             return
         file_path = self._dirs["metadata"] / f"perturbations_{idx}.npz"

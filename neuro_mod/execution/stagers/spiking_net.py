@@ -60,6 +60,14 @@ class StageSNNSimulation(_Stager):
         return LIFNet(**params)
 
     def _get_lif_net_with_perturbations(self, perturbations: dict) -> LIFNet:
+        """Build a LIF network with cluster-space perturbations applied.
+
+        Args:
+            perturbations: Mapping of parameter names to perturbation arrays.
+
+        Returns:
+            Initialized LIFNet with perturbed parameters.
+        """
         n_pops = len(self.cluster_vec) - 1
         arr_params = {
             "n_populations": n_pops,

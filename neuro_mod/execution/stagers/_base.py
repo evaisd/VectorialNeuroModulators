@@ -139,6 +139,14 @@ class _Stager(ABC):
 
     @staticmethod
     def _extract_perturbations(kwargs: dict) -> dict:
+        """Extract perturbation overrides from keyword arguments.
+
+        Args:
+            kwargs: Keyword arguments passed to the stager.
+
+        Returns:
+            Dictionary of perturbation arrays keyed by parameter name.
+        """
         perturbations = dict(kwargs.pop("perturbations", {}))
         for key in list(kwargs.keys()):
             if key.endswith("_perturbation"):
@@ -146,6 +154,11 @@ class _Stager(ABC):
         return perturbations
 
     def _apply_arousal_perturbations(self, perturbations: dict):
+        """Apply arousal perturbations to arousal parameters.
+
+        Args:
+            perturbations: Mapping of perturbation names to values.
+        """
         if not perturbations:
             return
         for key in ("level", "L", "x_0", "k", "M"):
@@ -160,6 +173,7 @@ class _Stager(ABC):
                 self.arousal_params[key] += float(np.mean(pert_vec))
 
     def _validate_arousal_level(self):
+        """Clamp arousal level to the [0, 1] range."""
         level = self.arousal_params.get("level")
         if level is None:
             return
@@ -167,6 +181,15 @@ class _Stager(ABC):
 
     @staticmethod
     def _coerce_cluster_vector(perturbation, n_populations: int) -> np.ndarray:
+        """Validate and coerce a cluster-space perturbation vector.
+
+        Args:
+            perturbation: Scalar or population-length vector/array.
+            n_populations: Expected number of cluster populations.
+
+        Returns:
+            A 1D NumPy array of length `n_populations`.
+        """
         arr = np.asarray(perturbation, dtype=float)
         if arr.ndim == 0:
             return np.full(n_populations, float(arr))
@@ -184,6 +207,16 @@ class _Stager(ABC):
             perturbation,
             as_delta: bool = True
     ) -> np.ndarray:
+        """Apply cluster-space scaling to a matrix.
+
+        Args:
+            matrix: Base matrix to perturb.
+            perturbation: Scalar, vector, or matrix perturbation.
+            as_delta: Whether to interpret values as multiplicative deltas.
+
+        Returns:
+            Perturbed matrix.
+        """
         if perturbation is None:
             return matrix
         pert = np.asarray(perturbation, dtype=float)
@@ -195,6 +228,14 @@ class _Stager(ABC):
 
     @staticmethod
     def _potentiated_mask(n_clusters: int) -> np.ndarray:
+        """Build a mask for within-cluster potentiated blocks.
+
+        Args:
+            n_clusters: Number of excitatory clusters.
+
+        Returns:
+            Boolean mask marking potentiated entries.
+        """
         n_pops = 2 * n_clusters + 2
         mask = np.zeros((n_pops, n_pops), dtype=bool)
         for k in range(n_clusters):
@@ -213,6 +254,17 @@ class _Stager(ABC):
             n_clusters: int,
             as_delta: bool = True
     ) -> np.ndarray:
+        """Apply perturbations only to potentiated synapse blocks.
+
+        Args:
+            matrix: Base synaptic matrix.
+            perturbation: Scalar or vector perturbation in cluster space.
+            n_clusters: Number of excitatory clusters.
+            as_delta: Whether to interpret values as multiplicative deltas.
+
+        Returns:
+            Perturbed matrix.
+        """
         if perturbation is None:
             return matrix
         pert = self._coerce_cluster_vector(perturbation, matrix.shape[0])
