@@ -40,7 +40,7 @@ class Analyzer:
         self.attractors_data = self.get_attractors_data()
 
     def _read_single(self, path: Path):
-        data = np.load(path)
+        data = np.load(path, allow_pickle=True)
         if path.suffix == '.npz':
             spikes = data['spikes']
         else:
@@ -162,6 +162,9 @@ class Analyzer:
         Returns:
             Mapping from attractor identity to summary dicts.
         """
+        if self._can_use_loaded_attractors(kwargs):
+            self._ensure_attractor_map()
+            return self.attractors_data
         minimal_time_ms = kwargs.pop('minimal_time_ms', self._minimal_life_span_ms)
         session_attractors = self._get_session_attractors_data(minimal_time_ms, **kwargs)
         session_lengths = self._get_session_lengths_steps(**kwargs)
@@ -171,6 +174,23 @@ class Analyzer:
                                for k
                                in attractors_data.keys()}
         return attractors_data
+
+    def _can_use_loaded_attractors(self, kwargs: dict) -> bool:
+        if not hasattr(self, "attractors_data"):
+            return False
+        if not kwargs:
+            return True
+        if set(kwargs.keys()) == {"minimal_time_ms"}:
+            return kwargs["minimal_time_ms"] == self._minimal_life_span_ms
+        return False
+
+    def _ensure_attractor_map(self) -> None:
+        if hasattr(self, "_attractor_map"):
+            return
+        self._attractor_map = {
+            self.attractors_data[k]["idx"]: k
+            for k in self.attractors_data.keys()
+        }
 
     def get_attractor_data(self,
                            *idx_or_identity: int | tuple[int, ...],):
