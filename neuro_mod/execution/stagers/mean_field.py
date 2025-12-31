@@ -17,9 +17,10 @@ class _BaseMeanFieldStager(_Stager, ABC):
         self.external_currents_params = self._reader('external_currents')
         self.c_mat = np.zeros_like(self.p_mat)
         self._set_c_matrix()
-        self.lif_mf = self._get_mf_lif(kwargs.get("rate_perturbation", 0.))
+        self.lif_mf = self._get_mf_lif(self._init_perturbations)
 
-    def _get_mf_lif(self, rate_perturbation=0.):
+    def _get_mf_lif(self, perturbations: dict | None = None):
+        perturbations = {} if perturbations is None else perturbations
         j_ext = self.network_params['j_ext']
         j_ext = np.asarray(j_ext) / self.n_neurons ** .5
         nu_ext = self.external_currents_params['nu_ext_baseline']
@@ -35,7 +36,31 @@ class _BaseMeanFieldStager(_Stager, ABC):
         j_ext, c_ext, nu_ext = [self._project_to_cluster_space(x, **arr_params)
                                 for x in
                                 (j_ext, self.external_currents_params['c_ext'], nu_ext)]
-        nu_ext += rate_perturbation
+        if "rate" in perturbations:
+            nu_ext = nu_ext + self._coerce_cluster_vector(perturbations["rate"], nu_ext.shape[0])
+        if "j_ext" in perturbations:
+            j_ext = j_ext + self._coerce_cluster_vector(perturbations["j_ext"], j_ext.shape[0])
+        def _to_cluster_vector(value):
+            arr = np.asarray(value, dtype=float)
+            if arr.ndim == 0:
+                return np.repeat(arr, nu_ext.shape[0])
+            return self._project_to_cluster_space(value, **arr_params)
+
+        threshold = _to_cluster_vector(self.network_params['threshold'])
+        if "threshold" in perturbations:
+            threshold = threshold + self._coerce_cluster_vector(perturbations["threshold"], threshold.shape[0])
+
+        tau_membrane = _to_cluster_vector(self.network_params['tau_membrane'])
+        if "tau_membrane" in perturbations:
+            tau_membrane = tau_membrane + self._coerce_cluster_vector(perturbations["tau_membrane"], tau_membrane.shape[0])
+
+        tau_synaptic = _to_cluster_vector(self.network_params['tau_synaptic'])
+        if "tau_synaptic" in perturbations:
+            tau_synaptic = tau_synaptic + self._coerce_cluster_vector(perturbations["tau_synaptic"], tau_synaptic.shape[0])
+
+        tau_refractory = _to_cluster_vector(self.network_params['tau_refractory'])
+        if "tau_refractory" in perturbations:
+            tau_refractory = tau_refractory + self._coerce_cluster_vector(perturbations["tau_refractory"], tau_refractory.shape[0])
         params = {
             "n_clusters": self.clusters_params['n_clusters'],
             'c_matrix': self.c_mat,
@@ -43,11 +68,11 @@ class _BaseMeanFieldStager(_Stager, ABC):
             'j_ext': j_ext,
             'c_ext': c_ext,
             'nu_ext': nu_ext,
-            'tau_membrane': self.network_params['tau_membrane'],
-            'tau_synaptic': self.network_params['tau_synaptic'],
-            'threshold': self.network_params['threshold'],
+            'tau_membrane': tau_membrane,
+            'tau_synaptic': tau_synaptic,
+            'threshold': threshold,
             'reset_voltage': self.network_params['reset_voltage'],
-            'tau_refractory': self.network_params['tau_refractory'],
+            'tau_refractory': tau_refractory,
         }
         return LIFMeanField(**params)
 

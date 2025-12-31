@@ -1,0 +1,115 @@
+init_params:
+        delta_t: .0005
+        duration_sec: 2.5
+        mechanism: analytic
+        n_neurons: 2000
+        n_excitatory: 1600
+        n_inhibitory: 400
+
+architecture:
+  network:
+    tau_membrane: 0.02
+    tau_synaptic: 0.005
+    tau_refractory: 0.005
+    threshold:
+      - 1.5
+      - 0.75
+    reset_voltage: 0.0
+    j_ext:
+      - 2.3  # from excitatory
+      - 2.3
+      - 0.
+      - 0.
+
+  clusters:
+    n_excitatory_background: 160
+    n_inhibitory_background: 40
+    n_clusters: 18
+    total_pops: 38
+    connectivity_fraction_probs:
+      - 0.2
+      - 0.5
+      - 0.5
+      - 0.5
+
+    j_baseline:
+      - 0.63
+      - 0.63
+      - -1.9
+      - -3.8
+
+    j_potentiated:
+      - 16.25
+      - 5.45
+      - 6.25
+      - 5.0
+
+external_currents:
+  c_ext:
+    - 320  # from excitatory
+    - 320
+    - 0
+    - 0
+
+  nu_ext_baseline:
+    - 7.  # to excitatory
+    - 7.  # to inhibitory
+    - 0.
+    - 0.
+
+stimulus:
+  stimulus_shape: diff2exp  # or linear or box
+  onsets:
+  amplitude: 0.
+  stimulated_clusters_prob: 0.5
+  stimulated_neuron_prob: 0.5
+  tau_rise: 0.075
+  tau_decay: 0.1
+
+settings:
+  save: False
+  plot: False
+  save_dir: simulations
+  sim_name: test_sim
+  random_seed: 256
+
+arousal:
+  level: 0.20
+  L: .75
+  x_0: .2
+  k: 1.25
+  M: 13.125
+
+perturbation:
+
+  rate:
+    vectors:
+      - [1, 1, -1]
+      - [-1, 1, 1]
+      - [1, -1, 1]
+    involved_clusters:
+      - [0, 1, 2]
+      - [1, 2, 3]
+      - [2, 3, 4]
+    seed: 256
+    params: [0.3, 0.02, 0.2]
+    time_dependence:
+      shape: hat
+      onset_time: 0
+      offset_time:
+
+  arousal_level:
+    vectors:
+      - [ 1, 1, -1 ]
+      - [ -1, 1, 1 ]
+      - [ 1, -1, 1 ]
+    involved_clusters:
+      - [ 0, 1, 2 ]
+      - [ 1, 2, 3 ]
+      - [ 2, 3, 4 ]
+    seed: 256
+    params: [ 0.3, 0.02, 0.2 ]
+    time_dependence:
+      shape: hat
+      onset_time: 0
+      offset_time:

@@ -36,6 +36,7 @@ class _Stager(ABC):
             **kwargs
     ):
         self.config = config
+        self._init_perturbations = self._extract_perturbations(kwargs)
         self.logger = logger or Logger(name=self.__class__.__name__)
         self.settings = self._reader('settings')
 
@@ -47,18 +48,26 @@ class _Stager(ABC):
         self.network_params = self._reader('architecture', 'network')
         self.clusters_params = self._reader('architecture', 'clusters')
         self.arousal_params = self._reader('arousal')
+        self._apply_arousal_perturbations(self._init_perturbations)
+        self._validate_arousal_level()
         self.arousal_denom = self._get_arousal_denom()
 
         for key, value in self._reader('init_params').items():
             setattr(self, key, value)
-        j_perturbation = kwargs.pop('j_perturbation', None)
-        self._setup_clustered_matrices(j_perturbation=j_perturbation)
+        j_perturbation = self._init_perturbations.get('j')
+        j_baseline_perturbation = self._init_perturbations.get('j_baseline')
+        j_potentiated_perturbation = self._init_perturbations.get('j_potentiated')
+        self._setup_clustered_matrices(
+            j_perturbation=j_perturbation,
+            j_baseline_perturbation=j_baseline_perturbation,
+            j_potentiated_perturbation=j_potentiated_perturbation,
+        )
 
     @classmethod
-    def from_dict(cls, params: dict):
+    def from_dict(cls, params: dict, **kwargs):
         yml_string = yaml.dump(params, default_flow_style=False)
         d_bytes = yml_string.encode('utf-8')
-        return cls(d_bytes)
+        return cls(d_bytes, **kwargs)
 
     def _reader(self, *keys: str):
         if isinstance(self.config, bytes):
@@ -87,19 +96,27 @@ class _Stager(ABC):
             self.logger.attach_file(str(self.metadata_dir / "run.log"))
 
     def _setup_clustered_matrices(self, *args, **kwargs):
-        j_baseline = self.clusters_params.pop('j_baseline')
+        clusters_params = dict(self.clusters_params)
+        j_baseline = np.asarray(clusters_params.pop('j_baseline'), dtype=float)
+        j_potentiated = np.asarray(clusters_params.pop('j_potentiated'), dtype=float)
         j_baseline[0] *= (1 - self._get_arousal_jee())
         params = {
             "n_neurons": self.n_neurons,
             "n_excitatory": self.n_excitatory,
             "j_baseline": j_baseline,
-            **self.clusters_params
+            "j_potentiated": j_potentiated,
+            **clusters_params
         }
         p, j, b, t = setup_matrices(**params)
         self.p_mat = p
-        j_perturbation = kwargs['j_perturbation']
-        j_perturbation = np.ones_like(j) if j_perturbation is None else j_perturbation
-        self.j_mat = j * j_perturbation
+        n_clusters = clusters_params["n_clusters"]
+        j_baseline_perturbation = kwargs.get('j_baseline_perturbation')
+        j_potentiated_perturbation = kwargs.get('j_potentiated_perturbation')
+        j = self._apply_matrix_perturbation(j, j_baseline_perturbation, as_delta=True)
+        j = self._apply_potentiated_perturbation(j, j_potentiated_perturbation, n_clusters, as_delta=True)
+        j_perturbation = kwargs.get('j_perturbation')
+        j = self._apply_matrix_perturbation(j, j_perturbation, as_delta=False)
+        self.j_mat = j
         self.cluster_vec = b
         self.types = t
 
@@ -120,6 +137,94 @@ class _Stager(ABC):
         L = self.arousal_params["L"]
         return L / self.arousal_denom
 
+    @staticmethod
+    def _extract_perturbations(kwargs: dict) -> dict:
+        perturbations = dict(kwargs.pop("perturbations", {}))
+        for key in list(kwargs.keys()):
+            if key.endswith("_perturbation"):
+                perturbations[key[:-12]] = kwargs.pop(key)
+        return perturbations
+
+    def _apply_arousal_perturbations(self, perturbations: dict):
+        if not perturbations:
+            return
+        for key in ("level", "L", "x_0", "k", "M"):
+            pert = perturbations.get(f"arousal_{key}")
+            if pert is None:
+                continue
+            if np.ndim(pert) == 0:
+                self.arousal_params[key] += float(pert)
+            else:
+                n_pops = self.clusters_params["total_pops"]
+                pert_vec = self._coerce_cluster_vector(pert, n_pops)
+                self.arousal_params[key] += float(np.mean(pert_vec))
+
+    def _validate_arousal_level(self):
+        level = self.arousal_params.get("level")
+        if level is None:
+            return
+        self.arousal_params["level"] = max(0.0, min(1.0, float(level)))
+
+    @staticmethod
+    def _coerce_cluster_vector(perturbation, n_populations: int) -> np.ndarray:
+        arr = np.asarray(perturbation, dtype=float)
+        if arr.ndim == 0:
+            return np.full(n_populations, float(arr))
+        if arr.ndim == 2:
+            if arr.shape[0] != n_populations:
+                raise ValueError("Perturbation has incompatible population size.")
+            arr = arr[:, 0]
+        if arr.shape != (n_populations,):
+            raise ValueError("Perturbation has incompatible population size.")
+        return arr
+
+    def _apply_matrix_perturbation(
+            self,
+            matrix: np.ndarray,
+            perturbation,
+            as_delta: bool = True
+    ) -> np.ndarray:
+        if perturbation is None:
+            return matrix
+        pert = np.asarray(perturbation, dtype=float)
+        if pert.shape == matrix.shape:
+            return matrix * (1 + pert) if as_delta else matrix * pert
+        pert = self._coerce_cluster_vector(pert, matrix.shape[0])
+        scale = (1 + pert) if as_delta else pert
+        return matrix * scale[:, None]
+
+    @staticmethod
+    def _potentiated_mask(n_clusters: int) -> np.ndarray:
+        n_pops = 2 * n_clusters + 2
+        mask = np.zeros((n_pops, n_pops), dtype=bool)
+        for k in range(n_clusters):
+            e_idx = k
+            i_idx = n_clusters + 1 + k
+            mask[e_idx, e_idx] = True
+            mask[e_idx, i_idx] = True
+            mask[i_idx, e_idx] = True
+            mask[i_idx, i_idx] = True
+        return mask
+
+    def _apply_potentiated_perturbation(
+            self,
+            matrix: np.ndarray,
+            perturbation,
+            n_clusters: int,
+            as_delta: bool = True
+    ) -> np.ndarray:
+        if perturbation is None:
+            return matrix
+        pert = self._coerce_cluster_vector(perturbation, matrix.shape[0])
+        mask = self._potentiated_mask(n_clusters)
+        if not mask.any():
+            return matrix
+        updated = matrix.copy()
+        rows, cols = np.where(mask)
+        scale = (1 + pert) if as_delta else pert
+        updated[rows, cols] *= scale[cols]
+        return updated
+
     @abstractmethod
     def run(self, *args, **kwargs):
         pass
@@ -128,7 +233,11 @@ class _Stager(ABC):
         self.data_file = self.data_dir / "outputs.npz"
         np.savez(self.data_file,
                  **kwargs)
-        shutil.copy(self.config, self.main_dir.joinpath('config.yaml'))
+        config_path = self.main_dir.joinpath('config.yaml')
+        if isinstance(self.config, bytes):
+            config_path.write_bytes(self.config)
+        else:
+            shutil.copy(self.config, config_path)
 
     @abstractmethod
     def _plot(self, *args, **kwargs):
