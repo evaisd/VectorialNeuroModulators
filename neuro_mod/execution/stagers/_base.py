@@ -7,7 +7,7 @@ import shutil
 import yaml
 import numpy as np
 
-from neuro_mod.execution.helpers import Logger
+from neuro_mod.execution.helpers.logger import Logger
 
 from neuro_mod.core.clustering import setup_matrices
 

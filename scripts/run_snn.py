@@ -5,7 +5,8 @@ from pathlib import Path
 
 from neuro_mod.execution import Repeater
 from neuro_mod.execution.helpers import Logger
-from neuro_mod.execution import helpers
+from neuro_mod.execution.helpers.cli import resolve_path, save_cmd
+from neuro_mod.execution.helpers.factories import make_snn_stager
 from neuro_mod.core.spiking_net.analysis import Analyzer
 
 
@@ -66,9 +67,9 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
 def main():
     root = Path(__file__).resolve().parents[1]
     args = _build_parser(root).parse_args()
-    config = helpers.resolve_path(root, args.config)
-    save_dir = helpers.resolve_path(root, args.save_dir)
-    helpers.save_cmd(save_dir / "metadata")
+    config = resolve_path(root, args.config)
+    save_dir = resolve_path(root, args.save_dir)
+    save_cmd(save_dir / "metadata")
     logger = Logger(name="Repeater")
     repeater = Repeater(
         n_repeats=args.n_repeats,
@@ -81,7 +82,7 @@ def main():
         parallel=args.parallel,
         max_workers=args.max_workers,
         executor=args.executor,
-        stager_factory=functools.partial(helpers.make_snn_stager, config_path=config),
+        stager_factory=functools.partial(make_snn_stager, config_path=config),
     )
     repeater.run()
     repeater.logger.info("Building analyzer and saving analysis.")

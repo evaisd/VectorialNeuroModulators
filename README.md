@@ -257,7 +257,7 @@ The `Analyzer` reads saved spikes and computes attractor statistics and
 transition matrices.
 
 ```python
-from neuro_mod.core.spiking_net.analysis.analyzer import Analyzer
+from neuro_mod.core.spiking_net.analysis import Analyzer
 
 analyzer = Analyzer("simulations/snn_test_run/data", clusters="simulations/snn_test_run/clusters.npy", dt=0.5e-3)
 print(analyzer.get_num_states())
