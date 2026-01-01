@@ -160,7 +160,7 @@ class Analyzer:
             **kwargs: Parameters forwarded to attractor extraction.
 
         Returns:
-            Mapping from attractor identity to summary dicts.
+            Mapping from attractor identity to summary dicts with starts/ends in seconds.
         """
         if t_from is not None or t_to is not None:
             return self._get_attractors_data_between(t_from, t_to)
@@ -190,9 +190,8 @@ class Analyzer:
             Filtered attractor data mapping.
         """
         total_duration_s = self.total_sim_duration_ms / 1e3
-        start_steps, end_steps = time_window.get_time_bounds_steps(
+        t_from_s, t_to_s = time_window.resolve_time_bounds_s(
             total_duration_s,
-            self.dt,
             t_from,
             t_to,
         )
@@ -201,7 +200,7 @@ class Analyzer:
             starts = entry.get("starts", [])
             if not starts:
                 continue
-            keep_idx = [i for i, s in enumerate(starts) if start_steps <= s <= end_steps]
+            keep_idx = [i for i, s in enumerate(starts) if t_from_s <= s <= t_to_s]
             if not keep_idx:
                 continue
             ends = entry.get("ends", [])
@@ -244,6 +243,15 @@ class Analyzer:
             self.attractors_data[k]["idx"]: k
             for k in self.attractors_data.keys()
         }
+
+    @staticmethod
+    def _convert_attractors_data_steps_to_seconds(attractors_data: dict, dt: float) -> dict:
+        for entry in attractors_data.values():
+            starts = entry.get("starts", [])
+            ends = entry.get("ends", [])
+            entry["starts"] = [round(float(s) * dt, 4) for s in starts]
+            entry["ends"] = [round(float(e) * dt, 4) for e in ends]
+        return attractors_data
 
     def get_attractor_data(self,
                            *idx_or_identity: int | tuple[int, ...],
@@ -318,7 +326,7 @@ class Analyzer:
             attractor_data = self.get_attractor_data(idx, t_from=t_from, t_to=t_to, **kwargs)[idx]
             starts = np.asarray(attractor_data['starts'])
             ends = np.asarray(attractor_data['ends'])
-            diffs = self.dt * 1e3 * (ends - starts)
+            diffs = (ends - starts) * 1e3
             means.append(diffs.mean().round(4))
             stds.append(diffs.std().round(4))
         return np.stack(means, axis=0), np.stack(stds, axis=0)
@@ -431,6 +439,7 @@ class Analyzer:
             "session_length": self.session_length,
             "session_lengths_steps": self._get_session_lengths_steps(),
             "total_sim_duration_ms": self.total_sim_duration_ms,
+            "starts_ends_unit": "seconds",
             "files": {
                 "attractors": attractors_filename,
                 "transition_matrix": transition_filename,
@@ -488,6 +497,12 @@ class Analyzer:
         obj._session_lengths_steps = config.get("session_lengths_steps")
 
         obj.attractors_data = np.load(attractors_path, allow_pickle=True).item()
+        unit = config.get("starts_ends_unit", "steps")
+        if unit == "steps":
+            obj.attractors_data = cls._convert_attractors_data_steps_to_seconds(
+                obj.attractors_data,
+                obj.dt,
+            )
         obj._attractor_map = {obj.attractors_data[k]["idx"]: k for k in obj.attractors_data.keys()}
         obj._transition_matrix = np.load(transition_path)
         obj.logger.info(
@@ -569,12 +584,12 @@ class Analyzer:
             occ[key_to_row[identity]] = entry.get("#", 0)
         if labels.size < 2:
             return np.zeros((n, n), dtype=float)
-        session_end_steps = self._get_session_end_steps()
+        session_end_times = self._get_session_end_times_s()
         counts = activity.get_transition_counts_from_occurrences(
             times,
             labels,
             key_to_row,
-            session_end_steps=session_end_steps if session_end_steps else None,
+            session_end_times=session_end_times if session_end_times else None,
         )
         occ[occ == 0] = 1.0
         return counts / occ[:, None]
@@ -595,7 +610,7 @@ class Analyzer:
         return attractors
 
     @lru_cache()
-    def _get_unique_attractor_first_start_steps_from_attractors(self) -> np.ndarray:
+    def _get_unique_attractor_first_start_times_from_attractors(self) -> np.ndarray:
         first_starts = []
         for entry in self.attractors_data.values():
             starts = entry.get("starts", [])
@@ -603,17 +618,17 @@ class Analyzer:
                 continue
             first_starts.append(min(starts))
         if not first_starts:
-            return np.empty((0,), dtype=int)
-        return np.asarray(first_starts, dtype=int)
+            return np.empty((0,), dtype=float)
+        return np.asarray(first_starts, dtype=float)
 
-    def _get_session_end_steps(self) -> list[int]:
+    def _get_session_end_times_s(self) -> list[float]:
         lengths = getattr(self, "_session_lengths_steps", None)
         if lengths is None:
             if self._get_sessions():
                 lengths = self._get_session_lengths_steps()
             else:
                 return []
-        return np.cumsum(lengths).tolist()
+        return (np.cumsum(lengths) * self.dt).tolist()
 
     def get_unique_attractors_count_until_time(
             self,
@@ -631,14 +646,13 @@ class Analyzer:
         """
         if time_ms < 0:
             raise ValueError("time_ms must be non-negative.")
-        dt_ms = self.dt * 1e3
-        time_steps = int(np.floor(time_ms / dt_ms))
+        time_s = time_ms / 1e3
         kwargs.pop('minimal_time_ms', None)
-        first_starts = self._get_unique_attractor_first_start_steps_from_attractors()
-        first_starts = np.asarray(first_starts, dtype=int)
+        first_starts = self._get_unique_attractor_first_start_times_from_attractors()
+        first_starts = np.asarray(first_starts, dtype=float)
         if first_starts.size == 0:
             return 0
-        return int(np.count_nonzero(first_starts <= time_steps))
+        return int(np.count_nonzero(first_starts <= time_s))
 
     def get_transition_density_until_time(
             self,
@@ -656,14 +670,13 @@ class Analyzer:
         """
         if time_ms < 0:
             raise ValueError("time_ms must be non-negative.")
-        dt_ms = self.dt * 1e3
-        time_steps = int(np.floor(time_ms / dt_ms))
+        time_s = time_ms / 1e3
         kwargs.pop('minimal_time_ms', None)
         times, labels = activity.get_ordered_occurrences(self.attractors_data)
         if times.size == 0:
             return 0.0
-        session_end_steps = self._get_session_end_steps()
-        before_mask = times < time_steps
+        session_end_times = self._get_session_end_times_s()
+        before_mask = times < time_s
         if not np.any(before_mask):
             return 0.0
         times = times[before_mask]
@@ -673,7 +686,7 @@ class Analyzer:
         pairs = activity.get_transition_pairs(
             times,
             labels,
-            session_end_steps=session_end_steps if session_end_steps else None,
+            session_end_times=session_end_times if session_end_times else None,
         )
         if not pairs:
             return 0.0
@@ -775,9 +788,11 @@ class Analyzer:
     def _merge_attractors_data(self, session_attractors, session_lengths):
         merged = {}
         idx = 0
-        offsets = np.cumsum([0] + session_lengths[:-1]).tolist()
+        offsets_s = np.cumsum(
+            [0.0] + [round(length * self.dt, 4) for length in session_lengths[:-1]]
+        ).tolist()
         for session_idx, attractors_data in enumerate(session_attractors):
-            offset = offsets[session_idx]
+            offset = offsets_s[session_idx]
             for identity, entry in attractors_data.items():
                 if identity not in merged:
                     merged[identity] = {
@@ -792,8 +807,12 @@ class Analyzer:
                     idx += 1
                 merged_entry = merged[identity]
                 merged_entry["#"] += entry["#"]
-                merged_entry["starts"].extend([s + offset for s in entry["starts"]])
-                merged_entry["ends"].extend([e + offset for e in entry["ends"]])
+                merged_entry["starts"].extend(
+                    [round((s * self.dt) + offset, 4) for s in entry["starts"]]
+                )
+                merged_entry["ends"].extend(
+                    [round((e * self.dt) + offset, 4) for e in entry["ends"]]
+                )
                 merged_entry["occurrence_durations"].extend(entry["occurrence_durations"])
                 merged_entry["total_duration"] += entry["total_duration"]
         for entry in merged.values():

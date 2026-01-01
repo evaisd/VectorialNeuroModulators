@@ -204,7 +204,7 @@ def get_transition_counts(
 
 
 def get_ordered_occurrences(attractors_data: dict):
-    """Return time-ordered start steps and identities from attractor data."""
+    """Return time-ordered start times and identities from attractor data."""
     times = []
     labels = []
     for identity, entry in attractors_data.items():
@@ -224,13 +224,13 @@ def get_ordered_occurrences(attractors_data: dict):
 def get_transition_pairs(
         times: np.ndarray,
         labels: np.ndarray,
-        session_end_steps: list[int] | None = None,
+        session_end_times: list[float] | None = None,
 ):
     """Return unique transition pairs from ordered occurrences."""
     if labels.size < 2:
         return set()
-    if session_end_steps:
-        session_ids = np.searchsorted(session_end_steps, times, side="right")
+    if session_end_times:
+        session_ids = np.searchsorted(session_end_times, times, side="right")
     else:
         session_ids = None
     pairs = set()
@@ -245,15 +245,15 @@ def get_transition_counts_from_occurrences(
         times: np.ndarray,
         labels: np.ndarray,
         key_to_row: dict,
-        session_end_steps: list[int] | None = None,
+        session_end_times: list[float] | None = None,
 ):
     """Return transition counts matrix from ordered occurrences."""
     n = len(key_to_row)
     counts = np.zeros((n, n), dtype=float)
     if labels.size < 2:
         return counts
-    if session_end_steps:
-        session_ids = np.searchsorted(session_end_steps, times, side="right")
+    if session_end_times:
+        session_ids = np.searchsorted(session_end_times, times, side="right")
     else:
         session_ids = None
     for idx in range(labels.size - 1):
