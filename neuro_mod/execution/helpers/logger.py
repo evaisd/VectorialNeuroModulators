@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TextIO
 import sys
+import threading
 
 
 _LEVELS = {
@@ -32,6 +33,7 @@ class Logger:
             raise ValueError(f"Unknown log level: {self.level}")
         self.level = normalized
         self._file_handle = open(self.file_path, "a", encoding="utf-8") if self.file_path else None
+        self._lock = threading.Lock()
 
     def close(self) -> None:
         """Close any open file handle."""
@@ -72,11 +74,12 @@ class Logger:
         prefix = " ".join(prefix_parts)
         line = f"{prefix} {message}\n"
 
-        self.stream.write(line)
-        self.stream.flush()
-        if self._file_handle:
-            self._file_handle.write(line)
-            self._file_handle.flush()
+        with self._lock:
+            self.stream.write(line)
+            self.stream.flush()
+            if self._file_handle:
+                self._file_handle.write(line)
+                self._file_handle.flush()
 
     def debug(self, message: str) -> None:
         """Log a debug message."""

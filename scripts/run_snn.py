@@ -1,10 +1,11 @@
 
 import argparse
+import functools
 from pathlib import Path
 
 from neuro_mod.execution import Repeater
 from neuro_mod.execution.helpers import Logger, resolve_path, save_cmd
-from neuro_mod.execution.stagers import StageSNNSimulation
+from neuro_mod.execution.helpers.factories import make_snn_stager
 from neuro_mod.spiking_neuron_net.analysis.analyzer import Analyzer
 
 def _build_parser(root: Path) -> argparse.ArgumentParser:
@@ -41,6 +42,23 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
         action="store_true",
         help="Load seeds from a prior run if available.",
     )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Run repeats in parallel.",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="Maximum number of workers to use for parallel execution.",
+    )
+    parser.add_argument(
+        "--executor",
+        choices=("thread", "process"),
+        default="thread",
+        help="Parallel executor backend.",
+    )
     return parser
 
 
@@ -59,11 +77,10 @@ def main():
         seed=args.seed,
         seeds_file=args.seeds_file,
         load_saved_seeds=args.load_saved_seeds,
-        stager_factory=lambda seed: StageSNNSimulation(
-            config,
-            random_seed=seed,
-            logger=logger,
-        ),
+        parallel=args.parallel,
+        max_workers=args.max_workers,
+        executor=args.executor,
+        stager_factory=functools.partial(make_snn_stager, config_path=config),
     )
     repeater.run()
     repeater.logger.info("Building analyzer and saving analysis.")

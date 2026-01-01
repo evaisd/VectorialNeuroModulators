@@ -4,11 +4,21 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Callable, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import traceback
 import shutil
 
 import numpy as np
 
 from neuro_mod.execution.helpers import Logger
+from neuro_mod.execution.helpers.repeater_helpers import (
+    default_run_fn,
+    default_save_outputs,
+    call_stager_factory,
+    validate_process_pickling,
+    build_process_save_fn,
+    run_process_pool,
+)
 
 
 class Repeater:
@@ -19,11 +29,14 @@ class Repeater:
         n_repeats: int | None,
         save_dir: Path | str,
         *,
-        stager_factory: Callable[[int], Any],
+        stager_factory: Callable[..., Any],
         config: Path | str | None = None,
         seed: int = 256,
         seeds_file: Path | str | None = None,
         load_saved_seeds: bool = False,
+        parallel: bool = False,
+        max_workers: int | None = None,
+        executor: str = "thread",
         run_fn: Callable[[Any], dict] | None = None,
         save_fn: Callable[[dict, int, Any], None] | None = None,
         logger: Logger | None = None,
@@ -33,11 +46,14 @@ class Repeater:
         Args:
             n_repeats: Number of repetitions or None to infer from seeds.
             save_dir: Directory to store outputs.
-            stager_factory: Callable that creates a stager for a seed.
+            stager_factory: Callable that creates a stager for a seed (optionally accepts logger=).
             config: Optional config path for metadata copy.
             seed: Base seed for generating repeat seeds.
             seeds_file: Optional file with pre-generated seeds.
             load_saved_seeds: Whether to load seeds from `save_dir`.
+            parallel: Whether to run repeats in parallel.
+            max_workers: Maximum number of worker threads/processes to use.
+            executor: Execution backend when parallel (thread or process).
             run_fn: Optional function that runs a stager.
             save_fn: Optional function that saves outputs.
             logger: Optional logger instance.
@@ -47,8 +63,12 @@ class Repeater:
         self.seed = seed
         self.logger = logger or Logger(name=self.__class__.__name__)
         self.stager_factory = stager_factory
-        self.run_fn = run_fn or (lambda stager: stager.run())
+        self.run_fn = run_fn or default_run_fn
         self.save_fn = save_fn or self._default_save_outputs
+        self.parallel = parallel
+        self.max_workers = max_workers
+        self.executor = executor
+        self._save_fn_is_default = save_fn is None
 
         self._set_dirs()
         self.seeds, self.n_repeats = self._initialize_seeds(
@@ -61,15 +81,94 @@ class Repeater:
     def run(self) -> None:
         """Execute all repeats."""
         self.logger.info(f"Running {self.n_repeats} repeats.")
-        for idx, seed in enumerate(self.seeds):
-            self._step(seed=seed, idx=idx)
+        if self.parallel and self.n_repeats > 1:
+            worker_desc = self.max_workers if self.max_workers is not None else "default"
+            self.logger.info(
+                f"Parallel execution enabled with max_workers={worker_desc} "
+                f"using executor={self.executor}."
+            )
+            self._run_parallel()
+        else:
+            for idx, seed in enumerate(self.seeds):
+                self._step(seed=seed, idx=idx)
         self.logger.info("Repeats complete.")
 
     def _step(self, seed: int, idx: int) -> None:
         self.logger.info(f"Starting repeat {idx + 1}/{self.n_repeats}.")
-        stager = self.stager_factory(seed)
-        outputs = self.run_fn(stager)
-        self.save_fn(outputs, idx, stager)
+        try:
+            stager = call_stager_factory(self.stager_factory, seed, self.logger)
+            outputs = self.run_fn(stager)
+            self.save_fn(outputs, idx, stager)
+        except Exception:
+            self.logger.error(
+                f"Repeat {idx + 1}/{self.n_repeats} failed.\n{traceback.format_exc()}"
+            )
+            raise
+        self.logger.info(f"Finished repeat {idx + 1}/{self.n_repeats}.")
+
+    def _run_parallel(self) -> None:
+        if self.executor not in {"thread", "process"}:
+            raise ValueError(f"Unknown executor: {self.executor}")
+
+        if self.executor == "process":
+            self._run_parallel_process()
+            return
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {
+                executor.submit(self._step, seed, idx): (idx, seed)
+                for idx, seed in enumerate(self.seeds)
+            }
+            for future in as_completed(futures):
+                idx, seed = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    self.logger.error(
+                        f"Parallel repeat {idx + 1}/{self.n_repeats} "
+                        f"with seed {seed} failed: {exc}"
+                    )
+                    raise
+
+    def _run_parallel_process(self) -> None:
+        logger_settings = {
+            "name": self.logger.name,
+            "level": self.logger.level,
+            "file_path": self.logger.file_path,
+            "include_timestamp": self.logger.include_timestamp,
+        }
+        process_save_fn = build_process_save_fn(
+            self.save_fn,
+            use_default=self._save_fn_is_default,
+            data_dir=self._data_dir,
+            plot_dir=self._plot_dir,
+            save_dir=self.save_dir,
+        )
+        validate_process_pickling(
+            stager_factory=self.stager_factory,
+            run_fn=self.run_fn,
+            save_fn=process_save_fn,
+        )
+        executor, futures = run_process_pool(
+            seeds=self.seeds,
+            n_repeats=self.n_repeats,
+            max_workers=self.max_workers,
+            stager_factory=self.stager_factory,
+            run_fn=self.run_fn,
+            save_fn=process_save_fn,
+            logger_settings=logger_settings,
+        )
+        with executor:
+            for future in as_completed(futures):
+                idx, seed = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    self.logger.error(
+                        f"Parallel repeat {idx + 1}/{self.n_repeats} "
+                        f"with seed {seed} failed: {exc}"
+                    )
+                    raise
 
     def _set_dirs(self) -> None:
         self.save_dir.mkdir(parents=True, exist_ok=True)
@@ -135,12 +234,11 @@ class Repeater:
             raise FileNotFoundError(f"Config file not found: {config_path}")
 
     def _default_save_outputs(self, outputs: dict, idx: int, stager: Any) -> None:
-        spikes = outputs.get("spikes") if isinstance(outputs, dict) else None
-        if spikes is not None:
-            np.save(self._data_dir / f"spikes_{idx}.npy", spikes)
-            if hasattr(stager, "_plot"):
-                stager._plot(spikes, plt_path=self._plot_dir / f"spikes_{idx}.png")
-
-        clusters = outputs.get("clusters") if isinstance(outputs, dict) else None
-        if clusters is not None and idx == 0:
-            np.save(self.save_dir / "clusters.npy", clusters)
+        default_save_outputs(
+            outputs,
+            idx,
+            stager,
+            data_dir=self._data_dir,
+            plot_dir=self._plot_dir,
+            save_dir=self.save_dir,
+        )

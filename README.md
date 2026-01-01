@@ -107,6 +107,17 @@ python scripts/run_snn.py \
 This runs `Repeater` + `StageSNNSimulation`, writes `data/spikes_*.npy`,
 `clusters.npy`, and saves attractor analysis to `analysis/`.
 
+Parallel execution is available:
+
+```bash
+python scripts/run_snn.py \
+  --config configs/snn_test_run.yaml \
+  --save-dir simulations/snn_test_run \
+  --n-repeats 4 \
+  --parallel \
+  --executor process
+```
+
 #### Perturbed spiking network runs
 
 Use `scripts/run_perturbed_snn.py` to run repeated simulations with
@@ -176,6 +187,23 @@ sweep.execute(
 
 Each sweep step writes a config snapshot under `configs/` in the sweep output
 directory so runs are reproducible.
+
+Parallel sweeps are supported as well:
+
+```python
+sweep.execute(
+    main_dir="simulations/sweep_demo",
+    baseline_params="configs/snn_test_run.yaml",
+    param=["external_currents", "nu_ext_baseline"],
+    sweep_params=[5.0, 7.5, 10.0],
+    param_idx=0,
+    parallel=True,
+    executor="process",
+)
+```
+
+Note: parallel runs keep deterministic outputs given fixed seeds, but log line
+ordering can interleave across workers.
 
 #### Perturbation config shape
 
