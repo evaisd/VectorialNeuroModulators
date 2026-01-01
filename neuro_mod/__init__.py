@@ -1,3 +1,3 @@
 """NeuroMod package for clustered network simulations and analysis."""
 
-from neuro_mod import mean_field, spiking_neuron_net, clustering, execution
+from neuro_mod import core, execution

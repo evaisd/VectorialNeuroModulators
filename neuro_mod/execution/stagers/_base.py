@@ -9,7 +9,7 @@ import numpy as np
 
 from neuro_mod.execution.helpers import Logger
 
-from neuro_mod.clustering import setup_matrices
+from neuro_mod.core.clustering import setup_matrices
 
 
 class _Stager(ABC):

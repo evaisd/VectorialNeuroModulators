@@ -8,8 +8,8 @@ import yaml
 from neuro_mod.execution import Repeater
 from neuro_mod.execution.helpers import Logger, resolve_path, save_cmd
 from neuro_mod.execution.helpers.factories import make_perturbed_snn_stager
-from neuro_mod.spiking_neuron_net.analysis.analyzer import Analyzer
-from neuro_mod.perturbations.vectorial import VectorialPerturbation
+from neuro_mod.core.spiking_net.analysis.analyzer import Analyzer
+from neuro_mod.core.perturbations.vectorial import VectorialPerturbation
 
 
 def _build_parser(root: Path) -> argparse.ArgumentParser:

@@ -6,8 +6,8 @@ from functools import lru_cache
 import logging
 
 import numpy as np
-from neuro_mod.spiking_neuron_net.analysis.logic import activity
-from neuro_mod.spiking_neuron_net.analysis.logic import time_window
+from neuro_mod.core.spiking_net.analysis.logic import activity
+from neuro_mod.core.spiking_net.analysis.logic import time_window
 
 
 class Analyzer:

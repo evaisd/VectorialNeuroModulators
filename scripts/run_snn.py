@@ -6,7 +6,7 @@ from pathlib import Path
 from neuro_mod.execution import Repeater
 from neuro_mod.execution.helpers import Logger, resolve_path, save_cmd
 from neuro_mod.execution.helpers.factories import make_snn_stager
-from neuro_mod.spiking_neuron_net.analysis.analyzer import Analyzer
+from neuro_mod.core.spiking_net.analysis.analyzer import Analyzer
 
 def _build_parser(root: Path) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run an SNN test simulation.")

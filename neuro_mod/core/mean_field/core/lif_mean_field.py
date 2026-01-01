@@ -1,8 +1,8 @@
 """Mean-field LIF model implementation for clustered networks."""
 
 import numpy as np
-from neuro_mod.mean_field.core import logic
-from neuro_mod.mean_field import helpers
+from neuro_mod.core.mean_field.core import logic
+from neuro_mod.core.mean_field import helpers
 
 
 class LIFMeanField:
@@ -199,7 +199,7 @@ class LIFMeanField:
 
         Returns:
             Tuple `(fp_type, eigvals)` as returned by
-            `neuro_mod.mean_field.core.logic.determine_stability`.
+            `neuro_mod.core.mean_field.core.logic.determine_stability`.
         """
         return logic.determine_stability(nu_star, self._fixed_point_residual)
 

@@ -3,7 +3,7 @@
 from scipy.linalg import circulant
 import numpy as np
 
-from neuro_mod.perturbations._base import BasePerturbator
+from neuro_mod.core.perturbations._base import BasePerturbator
 
 
 class CirculantPerturbation(BasePerturbator):

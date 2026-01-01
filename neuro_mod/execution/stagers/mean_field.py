@@ -4,7 +4,7 @@ from abc import ABC
 from pathlib import Path
 import numpy as np
 from neuro_mod.execution.stagers._base import _Stager
-from neuro_mod.mean_field import LIFMeanField
+from neuro_mod.core.mean_field import LIFMeanField
 
 
 class _BaseMeanFieldStager(_Stager, ABC):
@@ -168,7 +168,7 @@ class ReducedMeanFieldStager(_BaseMeanFieldStager):
             *args,
             **kwargs
     ):
-        from neuro_mod.mean_field.analysis import visualization as viz
+        from neuro_mod.core.mean_field.analysis import visualization as viz
         return viz.gen_potential_plot(grid, force_field, path)
 
     def __init__(self,
@@ -199,7 +199,7 @@ class ReducedMeanFieldStager(_BaseMeanFieldStager):
             Dictionary containing grid, force field, and potentials.
         """
         self.logger.info("Running reduced mean-field simulation.")
-        from neuro_mod.mean_field.analysis.logic import integration as ing
+        from neuro_mod.core.mean_field.analysis.logic import integration as ing
         nu_vecs = self._gen_grid_vecs(focus_pops, grid_density, grid_lims)
         mesh, nu_outs = self._get_effective_rates_on_grid(focus_pops, *nu_vecs)
         num_focus = len(focus_pops)

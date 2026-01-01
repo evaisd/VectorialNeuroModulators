@@ -1,6 +1,6 @@
 """Analysis stubs and helpers for mean-field simulations."""
 
-from neuro_mod.mean_field.analysis.logic import activity, integration as ing
+from neuro_mod.core.mean_field.analysis.logic import activity, integration as ing
 
 class Analyzer:
     """Placeholder analyzer for mean-field outputs."""

@@ -44,7 +44,7 @@ or add the repository root to your `PYTHONPATH` when running scripts.
     - **`core/lif_mean_field.py`**: `LIFMeanField` class implementing the
       population-rate mean-field model and fixed-point / stability analysis.
     - **`analysis/`**: Mean-field analysis helpers and visualization.
-  - **`spiking_neuron_net/`**
+  - **`spiking_net/`**
     - **`lif_net.py`**: `LIFNet` PyTorch module for simulating a recurrent
       LIF spiking network with synaptic and membrane dynamics.
     - **`clustering/`**: Utilities to construct clustered network connectivity.
@@ -255,7 +255,7 @@ The `Analyzer` reads saved spikes and computes attractor statistics and
 transition matrices.
 
 ```python
-from neuro_mod.spiking_neuron_net.analysis.analyzer import Analyzer
+from neuro_mod.core.spiking_net.analysis.analyzer import Analyzer
 
 analyzer = Analyzer("simulations/snn_test_run/data", clusters="simulations/snn_test_run/clusters.npy", dt=0.5e-3)
 print(analyzer.get_num_states())
@@ -277,7 +277,7 @@ finding fixed points and their stability:
 
 ```python
 import numpy as np
-from neuro_mod.mean_field.core import LIFMeanField
+from neuro_mod.core.mean_field.core import LIFMeanField
 
 n_clusters = 2
 C = np.ones((n_clusters, n_clusters), dtype=int)

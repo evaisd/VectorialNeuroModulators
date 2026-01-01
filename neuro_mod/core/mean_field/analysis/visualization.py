@@ -1,7 +1,7 @@
 """Plotting helpers for mean-field analysis outputs."""
 
 import matplotlib.pyplot as plt
-from neuro_mod.mean_field.analysis.logic import integration as ing
+from neuro_mod.core.mean_field.analysis.logic import integration as ing
 
 
 def gen_phase_diagram_plot(

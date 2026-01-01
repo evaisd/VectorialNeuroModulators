@@ -1,7 +1,7 @@
 """Vector-based perturbation generator for clustered models."""
 
 import numpy as np
-from neuro_mod.perturbations._base import BasePerturbator
+from neuro_mod.core.perturbations._base import BasePerturbator
 
 
 class VectorialPerturbation(BasePerturbator):

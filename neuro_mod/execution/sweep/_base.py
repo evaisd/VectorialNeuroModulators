@@ -15,7 +15,7 @@ from neuro_mod.execution.helpers.sweep_helpers import (
     validate_process_pickling,
     run_process_pool,
 )
-from neuro_mod.perturbations.vectorial import VectorialPerturbation
+from neuro_mod.core.perturbations.vectorial import VectorialPerturbation
 
 
 class _BaseSweepRunner(ABC):

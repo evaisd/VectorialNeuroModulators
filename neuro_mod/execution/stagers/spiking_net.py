@@ -5,10 +5,10 @@ import numpy as np
 import torch
 
 from neuro_mod.execution.stagers._base import _Stager
-from neuro_mod import clustering
-from neuro_mod.spiking_neuron_net import external
-from neuro_mod.spiking_neuron_net.lif_net import LIFNet
-from neuro_mod.spiking_neuron_net.external import CurrentGenerator
+from neuro_mod.core import clustering
+from neuro_mod.core.spiking_net import external
+from neuro_mod.core.spiking_net.lif_net import LIFNet
+from neuro_mod.core.spiking_net.external import CurrentGenerator
 
 
 DEFAULT_PARAMS = '../../../configs/default_snn_params.yaml'
@@ -196,7 +196,7 @@ class StageSNNSimulation(_Stager):
         return self.stimulus_generator.generate_stimulus(**params)
 
     def _plot(self, *args, **kwargs):
-        from neuro_mod.spiking_neuron_net.analysis.plotting import gen_raster_plot
+        from neuro_mod.core.spiking_net.analysis.plotting import gen_raster_plot
         spikes = args[0]
         pops = (
             self.n_excitatory,
