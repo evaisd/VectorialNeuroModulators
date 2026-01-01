@@ -2,7 +2,7 @@
 
 from abc import ABC
 from neuro_mod.execution.sweep._base import _BaseSweepRunner
-from neuro_mod.execution.stagers.mean_field import FullMeanFieldStager, ReducedMeanFieldStager
+from neuro_mod.execution.stagers import FullMeanFieldStager, ReducedMeanFieldStager
 
 __all__ = [
     'FullMeanFieldBaseSweepRunner',

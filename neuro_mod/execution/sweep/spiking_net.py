@@ -2,7 +2,7 @@
 
 from abc import abstractmethod, ABC
 from neuro_mod.execution.sweep._base import _BaseSweepRunner
-from neuro_mod.execution.stagers import StageSNNSimulation
+from neuro_mod.execution import StageSNNSimulation
 
 
 class SNNBaseSweepRunner(_BaseSweepRunner, ABC):

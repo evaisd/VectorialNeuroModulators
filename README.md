@@ -40,16 +40,18 @@ or add the repository root to your `PYTHONPATH` when running scripts.
 ### Project structure
 
 - **`neuro_mod/`**: Main Python package.
-  - **`mean_field/`**
-    - **`core/lif_mean_field.py`**: `LIFMeanField` class implementing the
-      population-rate mean-field model and fixed-point / stability analysis.
-    - **`analysis/`**: Mean-field analysis helpers and visualization.
-  - **`spiking_net/`**
-    - **`lif_net.py`**: `LIFNet` PyTorch module for simulating a recurrent
-      LIF spiking network with synaptic and membrane dynamics.
+  - **`core/`**
+    - **`mean_field/`**
+      - **`core/lif_mean_field.py`**: `LIFMeanField` class implementing the
+        population-rate mean-field model and fixed-point / stability analysis.
+      - **`analysis/`**: Mean-field analysis helpers and visualization.
+    - **`spiking_net/`**
+      - **`core/lif_net.py`**: `LIFNet` PyTorch module for simulating a recurrent
+        LIF spiking network with synaptic and membrane dynamics.
+      - **`core/external/`**: Stimulus and external current generators.
+      - **`analysis/`**: Spiking-network analysis and attractor logic.
     - **`clustering/`**: Utilities to construct clustered network connectivity.
-    - **`external/`**: Stimulus and external current generators.
-    - **`analysis/`**: Spiking-network analysis and attractor logic.
+    - **`perturbations/`**: Perturbation generators for structured inputs.
   - **`execution/`**: Stagers, sweep runners, repeaters, and logging helpers.
 - **`configs/`**: Example YAML configuration templates for simulations.
 - **`scripts/`**:

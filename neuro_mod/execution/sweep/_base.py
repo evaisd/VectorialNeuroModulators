@@ -10,12 +10,8 @@ import copy
 
 from neuro_mod.execution.stagers._base import _Stager
 from neuro_mod.execution.helpers import Logger
-from neuro_mod.execution.helpers.sweep_helpers import (
-    run_sweep_step,
-    validate_process_pickling,
-    run_process_pool,
-)
-from neuro_mod.core.perturbations.vectorial import VectorialPerturbation
+from neuro_mod.execution import helpers
+from neuro_mod.core.perturbations import VectorialPerturbation
 
 
 class _BaseSweepRunner(ABC):
@@ -156,8 +152,8 @@ class _BaseSweepRunner(ABC):
         total_steps = len(sweep_params)
         results = [None] * total_steps
         if executor == "process":
-            validate_process_pickling(runner_cls=type(self), step_kwargs=step_kwargs)
-            executor, futures = run_process_pool(
+            helpers.validate_process_pickling(runner_cls=type(self), step_kwargs=step_kwargs)
+            executor, futures = helpers.run_process_pool(
                 runner_cls=type(self),
                 baseline_params=baseline_params,
                 param=param,
@@ -178,7 +174,7 @@ class _BaseSweepRunner(ABC):
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
                 pool.submit(
-                    run_sweep_step,
+                    helpers.run_sweep_step,
                     runner_cls=type(self),
                     baseline_params=baseline_params,
                     param=param,
