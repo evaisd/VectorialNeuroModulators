@@ -19,6 +19,7 @@ from neuro_mod.execution.helpers.repeater_helpers import (
     build_process_save_fn,
     run_process_pool,
 )
+from neuro_mod.visualization import folder_plots_to_pdf
 
 
 class Repeater:
@@ -39,6 +40,8 @@ class Repeater:
         executor: str = "thread",
         run_fn: Callable[[Any], dict] | None = None,
         save_fn: Callable[[dict, int, Any], None] | None = None,
+        export_plots_pdf: bool = False,
+        plots_pdf_path: Path | str | None = None,
         logger: Logger | None = None,
     ) -> None:
         """Initialize the repeater.
@@ -56,6 +59,8 @@ class Repeater:
             executor: Execution backend when parallel (thread or process).
             run_fn: Optional function that runs a stager.
             save_fn: Optional function that saves outputs.
+            export_plots_pdf: Whether to export plots folder into a single PDF.
+            plots_pdf_path: Optional output path for the plots PDF.
             logger: Optional logger instance.
         """
         self.save_dir = Path(save_dir)
@@ -69,6 +74,8 @@ class Repeater:
         self.max_workers = max_workers
         self.executor = executor
         self._save_fn_is_default = save_fn is None
+        self.export_plots_pdf = export_plots_pdf
+        self.plots_pdf_path = plots_pdf_path
 
         self._set_dirs()
         self.seeds, self.n_repeats = self._initialize_seeds(
@@ -91,6 +98,8 @@ class Repeater:
         else:
             for idx, seed in enumerate(self.seeds):
                 self._step(seed=seed, idx=idx)
+        if self.export_plots_pdf:
+            self._export_plots_pdf()
         self.logger.info("Repeats complete.")
 
     def _step(self, seed: int, idx: int) -> None:
@@ -242,3 +251,14 @@ class Repeater:
             plot_dir=self._plot_dir,
             save_dir=self.save_dir,
         )
+
+    def _export_plots_pdf(self) -> None:
+        try:
+            output_path = folder_plots_to_pdf(
+                self._plot_dir,
+                output_path=self.plots_pdf_path,
+            )
+        except ValueError as exc:
+            self.logger.warning(f"Skipping plots PDF export: {exc}")
+            return
+        self.logger.info(f"Saved plots PDF to {output_path}.")
