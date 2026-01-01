@@ -203,6 +203,67 @@ def get_transition_counts(
     return counts, occ
 
 
+def get_ordered_occurrences(attractors_data: dict):
+    """Return time-ordered start steps and identities from attractor data."""
+    times = []
+    labels = []
+    for identity, entry in attractors_data.items():
+        starts = np.asarray(entry.get("starts", []))
+        if starts.size == 0:
+            continue
+        times.append(starts)
+        labels.append(np.array([identity] * starts.size, dtype=object))
+    if not times:
+        return np.empty((0,), dtype=int), np.empty((0,), dtype=object)
+    times = np.concatenate(times)
+    labels = np.concatenate(labels)
+    order = np.argsort(times)
+    return times[order], labels[order]
+
+
+def get_transition_pairs(
+        times: np.ndarray,
+        labels: np.ndarray,
+        session_end_steps: list[int] | None = None,
+):
+    """Return unique transition pairs from ordered occurrences."""
+    if labels.size < 2:
+        return set()
+    if session_end_steps:
+        session_ids = np.searchsorted(session_end_steps, times, side="right")
+    else:
+        session_ids = None
+    pairs = set()
+    for idx in range(labels.size - 1):
+        if session_ids is not None and session_ids[idx] != session_ids[idx + 1]:
+            continue
+        pairs.add((labels[idx], labels[idx + 1]))
+    return pairs
+
+
+def get_transition_counts_from_occurrences(
+        times: np.ndarray,
+        labels: np.ndarray,
+        key_to_row: dict,
+        session_end_steps: list[int] | None = None,
+):
+    """Return transition counts matrix from ordered occurrences."""
+    n = len(key_to_row)
+    counts = np.zeros((n, n), dtype=float)
+    if labels.size < 2:
+        return counts
+    if session_end_steps:
+        session_ids = np.searchsorted(session_end_steps, times, side="right")
+    else:
+        session_ids = None
+    for idx in range(labels.size - 1):
+        if session_ids is not None and session_ids[idx] != session_ids[idx + 1]:
+            continue
+        src = key_to_row[labels[idx]]
+        dst = key_to_row[labels[idx + 1]]
+        counts[src, dst] += 1.0
+    return counts
+
 def get_transition_matrix_session_aware(
         attractors_data: dict,
         session_attractors: list[dict],

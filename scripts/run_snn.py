@@ -11,18 +11,18 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run an SNN test simulation.")
     parser.add_argument(
         "--config",
-        default=str(root / "configs/snn_test_run.yaml"),
+        default=str(root / "configs/snn_long_run.yaml"),
         help="Path to the YAML config file.",
     )
     parser.add_argument(
         "--save-dir",
-        default=str(root / "simulations/snn_test_run"),
+        default=str(root / "simulations/snn_long_run"),
         help="Output directory for simulation artifacts.",
     )
     parser.add_argument(
         "--n-repeats",
         type=int,
-        default=1,
+        default=100,
         help="Number of repeats to run.",
     )
     parser.add_argument(
