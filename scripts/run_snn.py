@@ -8,7 +8,7 @@ from neuro_mod.execution import Repeater
 from neuro_mod.execution.helpers import Logger
 from neuro_mod.execution.helpers.cli import resolve_path, save_cmd
 from neuro_mod.execution.helpers.factories import make_snn_stager
-from neuro_mod.core.spiking_net.analysis import Analyzer
+from neuro_mod.core.spiking_net.processing import SNNProcessor
 
 
 def _build_parser(root: Path) -> argparse.ArgumentParser:
@@ -88,10 +88,11 @@ def main():
         plots_pdf_path=save_dir / "rasters.pdf"
     )
     repeater.run()
-    repeater.logger.info("Building analyzer and saving analysis.")
-    analyzer = Analyzer(save_dir / "data", clusters=save_dir / "clusters.npy")
-    analyzer.save_analysis(save_dir / "analysis")
-    repeater.logger.info("Analysis generation complete.")
+    repeater.logger.info("Processing spike data and saving analysis.")
+    processor = SNNProcessor(save_dir / "data", clusters_path=save_dir / "clusters.npy")
+    processor.process()
+    processor.save(save_dir / "analysis")
+    repeater.logger.info("Processing complete.")
     repeater.logger.info("Removing data.")
     shutil.rmtree(save_dir / "data")
 

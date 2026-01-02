@@ -8,7 +8,7 @@ import yaml
 from neuro_mod.execution import Repeater
 from neuro_mod.execution.helpers import Logger, resolve_path, save_cmd
 from neuro_mod.execution.helpers.factories import make_perturbed_snn_stager
-from neuro_mod.core.spiking_net.analysis.analyzer import Analyzer
+from neuro_mod.core.spiking_net.processing import SNNProcessor
 from neuro_mod.core.perturbations.vectorial import VectorialPerturbation
 
 
@@ -182,10 +182,11 @@ def main():
         ),
     )
     repeater.run()
-    repeater.logger.info("Building analyzer and saving analysis.")
-    analyzer = Analyzer(save_dir / "data", clusters=save_dir / "clusters.npy")
-    analyzer.save_analysis(save_dir / "analysis")
-    repeater.logger.info("Analysis generation complete.")
+    repeater.logger.info("Processing spike data and saving analysis.")
+    processor = SNNProcessor(save_dir / "data", clusters_path=save_dir / "clusters.npy")
+    processor.process()
+    processor.save(save_dir / "analysis")
+    repeater.logger.info("Processing complete.")
 
 
 if __name__ == "__main__":
