@@ -83,7 +83,7 @@ def main() -> int:
     self_transition_mean = float(np.mean(np.diag(transition))) if transition.size else 0.0
     density = float(np.count_nonzero(transition > 1e-6) / transition.size) if transition.size else 0.0
 
-    total_seconds = float(analyzer.total_sim_duration_ms) / 1000.0
+    total_seconds = float(analyzer.total_duration_ms) / 1000.0
     bin_size_s = 5.0
     time_edges = np.arange(0.0, total_seconds + bin_size_s, bin_size_s)
     time_centers = (time_edges[:-1] + time_edges[1:]) / 2.0
@@ -334,7 +334,7 @@ def main() -> int:
         "",
         "## Notes",
         "",
-        f"- dt: {analyzer.dt} s; total sim duration: {analyzer.total_sim_duration_ms} ms.",
+        f"- dt: {analyzer.dt} s; total sim duration: {analyzer.total_duration_ms} ms.",
         "- starts/ends unit: seconds; occurrence durations are in ms.",
         f"- time bin size for time-series plots: {bin_size_s:.0f} s.",
     ]
