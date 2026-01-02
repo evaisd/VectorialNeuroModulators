@@ -1,4 +1,4 @@
-"""Sweep runner base class for spiking network simulations."""
+"""Sweep runner logic class for spiking network simulations."""
 
 from abc import abstractmethod, ABC
 from neuro_mod.execution.sweep._base import _BaseSweepRunner

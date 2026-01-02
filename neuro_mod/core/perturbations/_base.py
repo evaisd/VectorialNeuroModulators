@@ -5,7 +5,7 @@ import numpy as np
 
 
 class BasePerturbator(ABC):
-    """Abstract base class for perturbation generators."""
+    """Abstract logic class for perturbation generators."""
 
     def __init__(self,
                  *args,

@@ -25,13 +25,13 @@ def gen_raster_plot(spikes: np.ndarray,
     times, neurons = spikes.nonzero()
     fig, ax = plt.subplots(figsize=(16, 8))
     ax.scatter(times * delta_t, neurons, s=0.1, color='black')  # each spike = one dot
-    exc, exc_bkg, inh_bkg = pops
+    exc, exc_background, inh_background = pops
     population_markers = [
         (0, exc, 'skyblue', 'Excitatory'),
         (exc, n_neurons, 'salmon', 'Inhibitory'),
-        (exc_bkg,
+        (exc_background,
          exc, 'blue', 'background excitatory'),
-        (inh_bkg,
+        (inh_background,
          n_neurons, 'red', 'background inhibitory'),
     ]
     for y_min, y_max, color, label in population_markers:

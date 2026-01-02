@@ -2,6 +2,7 @@
 import argparse
 import functools
 from pathlib import Path
+import shutil
 
 from neuro_mod.execution import Repeater
 from neuro_mod.execution.helpers import Logger
@@ -25,7 +26,7 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
     parser.add_argument(
         "--n-repeats",
         type=int,
-        default=100,
+        default=125,
         help="Number of repeats to run.",
     )
     parser.add_argument(
@@ -83,12 +84,16 @@ def main():
         max_workers=args.max_workers,
         executor=args.executor,
         stager_factory=functools.partial(make_snn_stager, config_path=config),
+        export_plots_pdf=True,
+        plots_pdf_path=save_dir / "rasters.pdf"
     )
     repeater.run()
     repeater.logger.info("Building analyzer and saving analysis.")
     analyzer = Analyzer(save_dir / "data", clusters=save_dir / "clusters.npy")
     analyzer.save_analysis(save_dir / "analysis")
     repeater.logger.info("Analysis generation complete.")
+    repeater.logger.info("Removing data.")
+    shutil.rmtree(save_dir / "data")
 
 
 if __name__ == "__main__":

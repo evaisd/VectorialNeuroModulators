@@ -13,12 +13,12 @@ def get_unique_attractors(activity_matrix: np.ndarray,):
         Sorted list of tuples describing co-active cluster indices.
     """
 
-    rows, cols = activity_matrix.shape
+    n_rows, n_cols = activity_matrix.shape
 
-    blocks = (cols + 63) // 64
-    padded = np.zeros((rows, blocks * 64), dtype=bool)
-    padded[:, :cols] = activity_matrix
-    activity_bits = np.packbits(padded.reshape(rows, -1), axis=1, bitorder='little')
+    blocks = (n_cols + 63) // 64
+    padded = np.zeros((n_rows, blocks * 64), dtype=bool)
+    padded[:, :n_cols] = activity_matrix
+    activity_bits = np.packbits(padded.reshape(n_rows, -1), axis=1, bitorder='little')
 
     def intersect_rows(i, j):
         return activity_bits[i] & activity_bits[j]
@@ -26,8 +26,8 @@ def get_unique_attractors(activity_matrix: np.ndarray,):
     cache = {}
 
     pairs = []
-    for i in range(rows):
-        for j in range(i+1, rows):
+    for i in range(n_rows):
+        for j in range(i + 1, n_rows):
             inter = intersect_rows(i, j)
             if np.any(inter):
                 key = frozenset((i, j))
@@ -44,7 +44,7 @@ def get_unique_attractors(activity_matrix: np.ndarray,):
 
             # Try to add rows > max(group) to avoid duplicates
             start = group[-1] + 1
-            for r in range(start, rows):
+            for r in range(start, n_rows):
                 new_inter = inter_vec & activity_bits[r]
                 if np.any(new_inter):
                     new_group = tuple(sorted(group + (r,)))
@@ -75,11 +75,11 @@ def extract_attractors(
     Returns:
         Mapping from attractor identity tuples to summary dictionaries.
     """
-    minimal_time = minimal_time_ms // dt_ms
+    minimal_steps = int(minimal_time_ms // dt_ms)
     changes = np.any(activity_matrix[:, 1:] != activity_matrix[:, :-1], axis=0)
     bounds = np.concatenate(([0], np.where(changes)[0] + 1, [activity_matrix.shape[1]]))
     durations = np.diff(bounds)
-    valid = durations >= minimal_time
+    valid = durations >= minimal_steps
 
     starts = bounds[:-1][valid].tolist()
     ends = bounds[1:][valid].tolist()
@@ -105,7 +105,7 @@ def extract_attractors(
         entry["starts"].append(start)
         entry["ends"].append(end)
         entry["occurrence_durations"].append(duration_ms)
-        entry["total_duration"] = sum(entry["occurrence_durations"])
+        entry["total_duration"] += duration_ms
 
     # indexed: dict[int, dict[str, object]] = {}
     # for idx, identity in enumerate(sorted(attractors.keys())):
@@ -132,33 +132,13 @@ def get_transition_matrix(
     Returns:
         Transition probability matrix `(n_states, n_states)`.
     """
+    if not attractors_data:
+        return np.zeros((0, 0), dtype=float)
     keys = sorted(attractors_data)
     key_to_row = {k: i for i, k in enumerate(keys)}
     n = len(keys)
-
-    times = []
-    labels = []
-
-    for k in keys:
-        s = np.asarray(attractors_data[k]["starts"])
-        times.append(s)
-        labels.append(np.full(len(s), key_to_row[k], dtype=int))
-
-    times = np.concatenate(times)
-    labels = np.concatenate(labels)
-
-    order = np.argsort(times)
-    labels = labels[order]
-
-    src = labels[:-1]
-    dst = labels[1:]
-
-    counts = np.zeros((n, n), dtype=float)
-    np.add.at(counts, (src, dst), 1.0)
-
-    occ = np.array([attractors_data[k]["#"] for k in keys], dtype=float)
+    counts, occ = get_transition_counts(attractors_data, key_to_row, n)
     occ[occ == 0] = 1.0
-
     return counts / occ[:, None]
 
 
@@ -204,15 +184,21 @@ def get_transition_counts(
 
 
 def get_ordered_occurrences(attractors_data: dict):
-    """Return time-ordered start times and identities from attractor data."""
+    """Return time-ordered start times and integer indices from attractor data."""
     times = []
     labels = []
     for identity, entry in attractors_data.items():
-        starts = np.asarray(entry.get("starts", []))
+        starts = np.asarray(entry.get("starts", [])).ravel()
         if starts.size == 0:
             continue
         times.append(starts)
-        labels.append(np.array([identity] * starts.size, dtype=object))
+        idx = entry.get("idx")
+        if idx is None:
+            if np.isscalar(identity) or isinstance(identity, (str, bytes)):
+                idx = identity
+            else:
+                idx = tuple(np.asarray(identity).ravel().tolist())
+        labels.append(np.full(starts.size, idx, dtype=object))
     if not times:
         return np.empty((0,), dtype=int), np.empty((0,), dtype=object)
     times = np.concatenate(times)
@@ -229,15 +215,12 @@ def get_transition_pairs(
     """Return unique transition pairs from ordered occurrences."""
     if labels.size < 2:
         return set()
-    if session_end_times:
-        session_ids = np.searchsorted(session_end_times, times, side="right")
-    else:
-        session_ids = None
+    session_ids = _get_session_ids(times, session_end_times)
     pairs = set()
-    for idx in range(labels.size - 1):
-        if session_ids is not None and session_ids[idx] != session_ids[idx + 1]:
+    for step_idx in range(labels.size - 1):
+        if session_ids is not None and session_ids[step_idx] != session_ids[step_idx + 1]:
             continue
-        pairs.add((labels[idx], labels[idx + 1]))
+        pairs.add((labels[step_idx], labels[step_idx + 1]))
     return pairs
 
 
@@ -252,17 +235,54 @@ def get_transition_counts_from_occurrences(
     counts = np.zeros((n, n), dtype=float)
     if labels.size < 2:
         return counts
-    if session_end_times:
-        session_ids = np.searchsorted(session_end_times, times, side="right")
-    else:
-        session_ids = None
-    for idx in range(labels.size - 1):
-        if session_ids is not None and session_ids[idx] != session_ids[idx + 1]:
+    session_ids = _get_session_ids(times, session_end_times)
+    for step_idx in range(labels.size - 1):
+        if session_ids is not None and session_ids[step_idx] != session_ids[step_idx + 1]:
             continue
-        src = key_to_row[labels[idx]]
-        dst = key_to_row[labels[idx + 1]]
+        src = key_to_row[labels[step_idx]]
+        dst = key_to_row[labels[step_idx + 1]]
         counts[src, dst] += 1.0
     return counts
+
+
+def get_transition_matrix_from_data(
+        attractors_data: dict,
+        session_end_times: list[float] | None = None,
+):
+    """Compute transition probabilities from attractor data."""
+    if not attractors_data:
+        return np.zeros((0, 0), dtype=float)
+    identities = [
+        identity
+        for identity, entry in sorted(
+            attractors_data.items(),
+            key=lambda item: item[1].get("idx", 0),
+        )
+    ]
+    key_to_row = {k: i for i, k in enumerate(identities)}
+    idx_to_row = {attractors_data[k].get("idx", k): key_to_row[k] for k in identities}
+    n = len(identities)
+    times, labels = get_ordered_occurrences(attractors_data)
+    if times.size == 0 or labels.size < 2:
+        return np.zeros((n, n), dtype=float)
+    occ = np.array([attractors_data[k].get("#", 0) for k in identities], dtype=float)
+    counts = get_transition_counts_from_occurrences(
+        times,
+        labels,
+        idx_to_row,
+        session_end_times=session_end_times,
+    )
+    occ[occ == 0] = 1.0
+    return counts / occ[:, None]
+
+
+def _get_session_ids(
+        times: np.ndarray,
+        session_end_times: list[float] | None,
+):
+    if session_end_times:
+        return np.searchsorted(session_end_times, times, side="right")
+    return None
 
 def get_transition_matrix_session_aware(
         attractors_data: dict,

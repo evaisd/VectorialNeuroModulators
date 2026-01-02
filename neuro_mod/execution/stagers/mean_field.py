@@ -98,7 +98,7 @@ class FullMeanFieldStager(_BaseMeanFieldStager):
         Args:
             config: Path, string, or bytes for the YAML config.
             random_seed: Optional random seed.
-            **kwargs: Extra parameters forwarded to the base stager.
+            **kwargs: Extra parameters forwarded to the logic stager.
         """
         super().__init__(config, random_seed, **kwargs)
 
@@ -180,7 +180,7 @@ class ReducedMeanFieldStager(_BaseMeanFieldStager):
         Args:
             config: Path, string, or bytes for the YAML config.
             random_seed: Optional random seed.
-            **kwargs: Extra parameters forwarded to the base stager.
+            **kwargs: Extra parameters forwarded to the logic stager.
         """
         super().__init__(config, random_seed, **kwargs)
 
