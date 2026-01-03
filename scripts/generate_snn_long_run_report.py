@@ -105,7 +105,6 @@ def main() -> int:
         plt.xlabel("Time (s)")
         plt.ylabel("New attractors per second")
         plt.title("Discovery rate of new attractors (5s bins)")
-        plt.tight_layout()
         plt.savefig(figures_dir / "new_attractor_rate.png", dpi=150)
         plt.close()
 
@@ -122,7 +121,6 @@ def main() -> int:
         plt.xlabel("Time (s)")
         plt.ylabel("L2 norm")
         plt.title("Transition matrix L2 norms over time (5s bins)")
-        plt.tight_layout()
         plt.savefig(figures_dir / "tm_l2_density.png", dpi=150)
         plt.close()
 
@@ -158,7 +156,6 @@ def main() -> int:
             loc="center left",
             bbox_to_anchor=(1.02, 0.5),
         )
-        plt.gcf().subplots_adjust(right=0.78)
         plt.savefig(figures_dir / "lifespan_vs_occurrences.png", dpi=150)
         plt.close()
 
@@ -189,7 +186,6 @@ def main() -> int:
         axes[1].set_ylabel("Mean lifespan (ms)")
         axes[1].set_title("Size vs mean lifespan")
         fig.suptitle("Attractor size correlations")
-        fig.tight_layout()
         fig.savefig(figures_dir / "size_correlations.png", dpi=150)
         plt.close(fig)
 
@@ -203,7 +199,6 @@ def main() -> int:
         plt.xlabel("Mean lifespan (ms)")
         plt.ylabel("Count")
         plt.title("Mean lifespan distribution across attractors")
-        plt.tight_layout()
         plt.savefig(figures_dir / "mean_lifespan_hist.png", dpi=150)
         plt.close()
 
@@ -222,7 +217,6 @@ def main() -> int:
         plt.xlabel("Attractor size (cluster count)")
         plt.ylabel("Mean lifespan (ms)")
         plt.title("Mean lifespan by attractor size")
-        plt.tight_layout()
         plt.savefig(figures_dir / "mean_lifespan_by_size.png", dpi=150)
         plt.close()
 
@@ -238,7 +232,6 @@ def main() -> int:
         plt.ylabel("Total duration (ms)")
         plt.title("Top attractors by total occupancy")
         plt.xticks(rotation=45, ha="right")
-        plt.tight_layout()
         plt.savefig(figures_dir / "top_attractors.png", dpi=150)
         plt.close()
 
@@ -251,7 +244,6 @@ def main() -> int:
         plt.xlabel("Occurrence duration (ms)")
         plt.ylabel("Count")
         plt.title("Occurrence duration distribution")
-        plt.tight_layout()
         plt.savefig(figures_dir / "duration_hist.png", dpi=150)
         plt.close()
 
@@ -268,8 +260,7 @@ def main() -> int:
         plt.title("Transition matrix (top attractors)")
         plt.xlabel("To")
         plt.ylabel("From")
-        plt.tight_layout()
-        plt.savefig(figures_dir / "transition_heatmap_top.png", dpi=150)
+        plt.savefig(figures_dir / "transition_heatmap_top.png", dpi=150, bbox_inches="tight")
         plt.close()
 
     report_path = report_dir / "snn_long_run_report.md"
