@@ -49,10 +49,13 @@ or add the repository root to your `PYTHONPATH` when running scripts.
       - **`core/lif_net.py`**: `LIFNet` PyTorch module for simulating a recurrent
         LIF spiking network with synaptic and membrane dynamics.
       - **`core/external/`**: Stimulus and external current generators.
+      - **`processing/`**: Data processing (spikes to attractors).
       - **`analysis/`**: Spiking-network analysis and attractor logic.
     - **`clustering/`**: Utilities to construct clustered network connectivity.
     - **`perturbations/`**: Perturbation generators for structured inputs.
+  - **`pipeline/`**: Generic experiment pipeline orchestrating Simulation -> Processing -> Analysis -> Plotting.
   - **`execution/`**: Stagers, sweep runners, repeaters, and logging helpers.
+  - **`visualization/`**: Plotting utilities including journal-style and seaborn integration.
 - **`configs/`**: Example YAML configuration templates for simulations.
 - **`scripts/`**:
   - `run_snn.py`: Run repeated spiking-net simulations and write analysis artifacts.
@@ -207,6 +210,59 @@ sweep.execute(
 Note: parallel runs keep deterministic outputs given fixed seeds, but log line
 ordering can interleave across workers.
 
+#### Experiment Pipeline
+
+The `Pipeline` class provides a unified interface for running experiments with
+full reproducibility and logging. It orchestrates the workflow:
+**Simulation -> Processing -> Analysis -> DataFrame -> Plotting (seaborn)**.
+
+```python
+from pathlib import Path
+from neuro_mod.pipeline import Pipeline, PipelineConfig, ExecutionMode, SeabornPlotter
+from neuro_mod.execution.stagers import StageSNNSimulation
+from neuro_mod.core.spiking_net.processing import SNNProcessor
+from neuro_mod.core.spiking_net.analysis import SNNAnalyzer
+
+# Define factories for each pipeline phase
+pipeline = Pipeline(
+    simulator_factory=lambda seed: StageSNNSimulation("configs/snn_test_run.yaml", random_seed=seed),
+    processor_factory=lambda raw: SNNProcessor(raw["spikes_path"]),
+    analyzer_factory=SNNAnalyzer,
+    plotter=SeabornPlotter(),
+)
+
+# Run a swept repeated experiment
+result = pipeline.run(PipelineConfig(
+    mode=ExecutionMode.SWEEP_REPEATED,
+    n_repeats=10,
+    sweep_param="arousal.level",
+    sweep_values=[0.1, 0.3, 0.5, 0.7, 0.9],
+    parallel=True,
+    save_dir=Path("experiments/arousal_sweep"),
+))
+
+# Access results
+df = result.dataframes["aggregated"]  # DataFrame with sweep_value, repeat columns
+metrics = result.metrics["aggregated"]
+```
+
+**Execution modes:**
+- `SINGLE`: Single simulation run
+- `REPEATED`: Multiple runs with seed management
+- `SWEEP`: Parameter variations (one run per value)
+- `SWEEP_REPEATED`: Factorial design (sweep x repeats)
+
+**Reproducibility features:**
+- Deterministic seed generation from `base_seed`
+- Config persistence to JSON
+- Git commit hash tracking
+- Timestamps and duration logging
+
+**Logging:**
+- Configurable log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`)
+- File logging to `save_dir/logs/pipeline.log`
+- Progress callbacks for UI integration
+
 #### Perturbation config shape
 
 Perturbations are configured per parameter under `perturbation` in YAML.
@@ -251,20 +307,32 @@ Supported targets include `rate`, `j_baseline`, `j_potentiated`, `j_ext`,
 `threshold`, `tau_membrane`, `tau_synaptic`, `tau_refractory`, and arousal
 parameters (`arousal_level`, `arousal_L`, `arousal_x_0`, `arousal_k`, `arousal_M`).
 
-#### Spiking-net analyzer
+#### Spiking-net processing and analysis
 
-The `Analyzer` reads saved spikes and computes attractor statistics and
-transition matrices.
+The `SNNProcessor` transforms raw spike data into attractor representations,
+and `SNNAnalyzer` computes statistics and transition matrices.
 
 ```python
-from neuro_mod.core.spiking_net.analysis import Analyzer
+from neuro_mod.core.spiking_net.processing import SNNProcessor
+from neuro_mod.core.spiking_net.analysis import SNNAnalyzer
 
-analyzer = Analyzer("simulations/snn_test_run/data", clusters="simulations/snn_test_run/clusters.npy", dt=0.5e-3)
-print(analyzer.get_num_states())
-analyzer.save_analysis("simulations/snn_test_run/analysis")
+# Process raw spikes into attractors
+processor = SNNProcessor(
+    spikes_path="simulations/snn_test_run/data",
+    clusters_path="simulations/snn_test_run/clusters.npy",
+    dt=0.5e-3,
+)
+attractors_data = processor.process()
+processor.save("simulations/snn_test_run/analysis")
 
-loaded = Analyzer.load_analysis("simulations/snn_test_run/analysis")
-print(loaded.get_transition_matrix().shape)
+# Analyze the processed data
+analyzer = SNNAnalyzer("simulations/snn_test_run/analysis")
+print(f"Number of attractors: {analyzer.get_num_states()}")
+print(f"Transition matrix shape: {analyzer.get_transition_matrix().shape}")
+
+# Convert to DataFrame for further analysis
+df = analyzer.to_dataframe()
+metrics = analyzer.get_summary_metrics()
 ```
 
 The helper script `scripts/load_snn_analysis.py` shows how to load a saved
