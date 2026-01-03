@@ -109,7 +109,7 @@ def load_metadata(save_dir: Path) -> dict[str, Any]:
 
 
 def save_dataframe(df: pd.DataFrame, path: Path, name: str) -> None:
-    """Save a DataFrame to parquet format.
+    """Save a DataFrame to parquet format (or CSV as fallback).
 
     Args:
         df: DataFrame to save.
@@ -117,11 +117,15 @@ def save_dataframe(df: pd.DataFrame, path: Path, name: str) -> None:
         name: Name for the file (without extension).
     """
     path.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(path / f"{name}.parquet", index=False)
+    try:
+        df.to_parquet(path / f"{name}.parquet", index=False)
+    except ImportError:
+        # Fall back to CSV if parquet engines not available
+        df.to_csv(path / f"{name}.csv", index=False)
 
 
 def load_dataframe(path: Path, name: str) -> pd.DataFrame:
-    """Load a DataFrame from parquet format.
+    """Load a DataFrame from parquet format (or CSV as fallback).
 
     Args:
         path: Directory containing the file.
@@ -130,7 +134,15 @@ def load_dataframe(path: Path, name: str) -> pd.DataFrame:
     Returns:
         Loaded DataFrame.
     """
-    return pd.read_parquet(path / f"{name}.parquet")
+    parquet_path = path / f"{name}.parquet"
+    csv_path = path / f"{name}.csv"
+
+    if parquet_path.exists():
+        return pd.read_parquet(parquet_path)
+    elif csv_path.exists():
+        return pd.read_csv(csv_path)
+    else:
+        raise FileNotFoundError(f"No parquet or CSV file found for '{name}' in {path}")
 
 
 def save_metrics(metrics: dict[str, Any], path: Path, name: str) -> None:
