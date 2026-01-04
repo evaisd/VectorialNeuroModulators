@@ -113,7 +113,8 @@ class SNNAnalyzer(_BaseAnalyzer):
 
         Returns:
             DataFrame with columns: attractor_id, clusters, start, end,
-            duration_ms, occurrence_idx.
+            duration_ms, occurrence_idx. If batch processing was used,
+            also includes: repeat, seed, sweep_value, sweep_idx.
         """
         rows = []
         for identity, entry in self.attractors_data.items():
@@ -122,15 +123,35 @@ class SNNAnalyzer(_BaseAnalyzer):
             ends = entry.get("ends", [])
             durations = entry.get("occurrence_durations", [])
 
+            # Check for batch processing metadata
+            repeat_indices = entry.get("repeat_indices", [])
+            seeds = entry.get("seeds", [])
+            sweep_values = entry.get("sweep_values", [])
+            sweep_indices = entry.get("sweep_indices", [])
+            has_metadata = bool(repeat_indices or seeds or sweep_values)
+
             for i, (start, end, dur) in enumerate(zip(starts, ends, durations)):
-                rows.append({
+                row = {
                     "attractor_id": attractor_id,
                     "clusters": identity,
                     "start": start,
                     "end": end,
                     "duration_ms": dur,
                     "occurrence_idx": i,
-                })
+                }
+
+                # Add metadata columns if present
+                if has_metadata:
+                    if i < len(repeat_indices):
+                        row["repeat"] = repeat_indices[i]
+                    if i < len(seeds):
+                        row["seed"] = seeds[i]
+                    if i < len(sweep_values) and sweep_values[i] is not None:
+                        row["sweep_value"] = sweep_values[i]
+                    if i < len(sweep_indices) and sweep_indices[i] is not None:
+                        row["sweep_idx"] = sweep_indices[i]
+
+                rows.append(row)
 
         df = pd.DataFrame(rows)
         if not df.empty:
@@ -600,6 +621,42 @@ class SNNAnalyzer(_BaseAnalyzer):
             norms[i - 1] = np.linalg.norm(tm_next - tm_prev)
             tm_prev = tm_next
         return times[1:], norms
+
+    def get_time_evolution_dataframe(
+        self,
+        *,
+        t: float | None = None,
+        dt: float | None = None,
+        num_steps: int | None = None,
+    ) -> pd.DataFrame:
+        """Return time-evolution metrics as a DataFrame.
+
+        Columns:
+            time_ms: Time points in milliseconds.
+            transition_l2_norm: L2 norm between consecutive transition matrices.
+            unique_attractors_count: Unique attractors observed up to time.
+        """
+        times_s, norms = self.get_transition_matrix_l2_norms_until_time(
+            t=t,
+            dt=dt,
+            num_steps=num_steps,
+        )
+        if times_s.size == 0:
+            return pd.DataFrame(
+                columns=["time_ms", "transition_l2_norm", "unique_attractors_count"]
+            )
+        times_ms = times_s * 1e3
+        unique_counts = np.array(
+            [self.get_unique_attractors_count_until_time(t_ms) for t_ms in times_ms],
+            dtype=int,
+        )
+        return pd.DataFrame(
+            {
+                "time_ms": times_ms,
+                "transition_l2_norm": norms,
+                "unique_attractors_count": unique_counts,
+            }
+        )
 
     # --- Helper methods ---
 
