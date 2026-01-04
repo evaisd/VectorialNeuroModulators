@@ -1,6 +1,23 @@
 #!/usr/bin/env python
+"""Generate detailed analysis report from SNN simulation results.
+
+This script creates a comprehensive markdown report with visualizations
+from processed SNN data. It works with data produced by either:
+- The Pipeline architecture (recommended)
+- Legacy SNNProcessor + SNNAnalyzer workflow
+
+Usage:
+    python scripts/generate_snn_long_run_report.py
+
+    # Custom paths
+    python scripts/generate_snn_long_run_report.py \
+        --analysis-dir simulations/snn_long_run/analysis \
+        --report-dir simulations/snn_long_run/report
+"""
+
 from __future__ import annotations
 
+import argparse
 import os
 from datetime import datetime
 from pathlib import Path
@@ -16,18 +33,48 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from neuro_mod.core.spiking_net.analysis import SNNAnalyzer
+from neuro_mod.core.spiking_net.analysis.logic import helpers
 from neuro_mod.execution.helpers.logger import Logger
 from neuro_mod.visualization import journal_style
-from neuro_mod.core.spiking_net.analysis.logic import helpers
+
+
+def _build_parser(root: Path) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Generate detailed SNN analysis report.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument(
+        "--analysis-dir",
+        type=Path,
+        default=root / "simulations" / "snn_long_run" / "analysis",
+        help="Directory containing processed analysis data.",
+    )
+    parser.add_argument(
+        "--report-dir",
+        type=Path,
+        default=root / "simulations" / "snn_long_run" / "report",
+        help="Directory to save the report and figures.",
+    )
+    parser.add_argument(
+        "--bin-size",
+        type=float,
+        default=5.0,
+        help="Time bin size in seconds for time-series plots.",
+    )
+    return parser
 
 
 def main() -> int:
+    root = Path(__file__).resolve().parents[1]
+    args = _build_parser(root).parse_args()
+
     logger = Logger(name="SNNLongRunReport")
-    repo_dir = Path(__file__).resolve().parents[1]
-    base_dir = repo_dir / "simulations" / "snn_long_run"
-    analysis_dir = base_dir / "analysis"
-    report_dir = base_dir / "report"
+    analysis_dir = args.analysis_dir
+    report_dir = args.report_dir
     figures_dir = report_dir / "figures"
+    bin_size_s = args.bin_size
+
     report_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
     Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
@@ -84,11 +131,10 @@ def main() -> int:
     density = float(np.count_nonzero(transition > 1e-6) / transition.size) if transition.size else 0.0
 
     total_seconds = float(analyzer.total_duration_ms) / 1000.0
-    bin_size_s = 5.0
     time_edges = np.arange(0.0, total_seconds + bin_size_s, bin_size_s)
     time_centers = (time_edges[:-1] + time_edges[1:]) / 2.0
 
-    # Plot: new attractors per 5s bin (derivative of unique count)
+    # Plot: new attractors per bin (derivative of unique count)
     if time_edges.size > 1:
         logger.info("Plotting new attractor discovery rate")
         journal_style.set_figure_size("double", aspect=0.35)
@@ -104,11 +150,11 @@ def main() -> int:
         plt.plot(time_centers, new_rate, color="#1b9e77", linewidth=1.5)
         plt.xlabel("Time (s)")
         plt.ylabel("New attractors per second")
-        plt.title("Discovery rate of new attractors (5s bins)")
+        plt.title(f"Discovery rate of new attractors ({bin_size_s:.0f}s bins)")
         plt.savefig(figures_dir / "new_attractor_rate.png", dpi=150)
         plt.close()
 
-    # Plot: L2 norms of transition matrices across time (Analyzer)
+    # Plot: L2 norms of transition matrices across time
     if time_edges.size > 1:
         logger.info("Plotting transition matrix L2 norms over time")
         journal_style.set_figure_size("double", aspect=0.35)
@@ -120,7 +166,7 @@ def main() -> int:
         plt.plot(l2_times, l2_norms, color="#e76f51", linewidth=1.5)
         plt.xlabel("Time (s)")
         plt.ylabel("L2 norm")
-        plt.title("Transition matrix L2 norms over time (5s bins)")
+        plt.title(f"Transition matrix L2 norms over time ({bin_size_s:.0f}s bins)")
         plt.savefig(figures_dir / "tm_l2_density.png", dpi=150)
         plt.close()
 
@@ -289,11 +335,11 @@ def main() -> int:
         "",
         "![New attractor rate](figures/new_attractor_rate.png)",
         "",
-        "Discovery rate of new attractors per second (5s bins).",
+        "Discovery rate of new attractors per second.",
         "",
         "![TM L2 density](figures/tm_l2_density.png)",
         "",
-        "L2 norm between consecutive transition matrices (Analyzer, 5s bins).",
+        "L2 norm between consecutive transition matrices.",
         "",
         "![Lifespan vs occurrences](figures/lifespan_vs_occurrences.png)",
         "",
