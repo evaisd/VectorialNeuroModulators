@@ -1,17 +1,19 @@
 #!/usr/bin/env python
-"""Example script demonstrating the experiment Pipeline.
+"""Example script demonstrating the experiment Pipeline with unified processing.
 
 This script shows how to use the Pipeline class to run experiments with
-full reproducibility, logging, and automatic plotting via seaborn.
+full reproducibility, logging, unified attractor identification, and
+automatic plotting via seaborn.
 
 Usage:
-    python scripts/run_pipeline_example.py --config configs/snn_test_run.yaml --save-dir experiments/pipeline_demo
+    # Single run
+    python scripts/run_pipeline_example.py --config configs/snn_test_run.yaml
 
-    # With parameter sweep
-    python scripts/run_pipeline_example.py --config configs/snn_test_run.yaml --save-dir experiments/sweep_demo --mode sweep
+    # Repeated runs with unified processing (consistent attractor IDs)
+    python scripts/run_pipeline_example.py --mode repeated --n-repeats 5 --unified
 
-    # With repeated runs
-    python scripts/run_pipeline_example.py --config configs/snn_test_run.yaml --save-dir experiments/repeated_demo --mode repeated --n-repeats 5
+    # Parameter sweep with repeats (hierarchy: sweep_value -> attractors)
+    python scripts/run_pipeline_example.py --mode sweep_repeated --n-repeats 3 --unified
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 # Add repo root to path if running as script
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -33,33 +36,36 @@ from neuro_mod.pipeline import (
     SeabornPlotter,
 )
 from neuro_mod.core.spiking_net.analysis import SNNAnalyzer
-from neuro_mod.core.spiking_net.processing import SNNProcessor
+from neuro_mod.core.spiking_net.processing import (
+    SNNProcessor,
+    SNNBatchProcessorFactory,
+)
 from neuro_mod.execution.stagers import StageSNNSimulation
 
 
 def create_simulator_factory(config_path: Path):
     """Create a factory that produces SNN simulators with different seeds."""
 
-    def factory(seed: int, **kwargs):
-        """Create a StageSNNSimulation instance."""
+    def factory(seed: int, sweep_param=None, sweep_value=None, **kwargs):
+        """Create a StageSNNSimulation instance.
+
+        If sweep_param/sweep_value are provided, they would be used to modify
+        the simulation configuration (not implemented in this example).
+        """
         stager = StageSNNSimulation(config_path, random_seed=seed)
         return stager
 
     return factory
 
 
-def create_processor_factory():
+def create_processor_factory(dt: float = 0.5e-3):
     """Create a factory that produces SNNProcessor instances."""
 
-    def factory(raw_data: dict, **kwargs):
-        """Create an SNNProcessor from simulation output."""
-        # The stager returns a dict with paths to saved data
-        # For this example, we'll use the spikes path from the output
+    def factory(raw_data: dict[str, Any], **kwargs) -> SNNProcessor:
         spikes_path = raw_data.get("spikes_path")
         clusters_path = raw_data.get("clusters_path")
 
         if spikes_path is None:
-            # If running without save, create processor from in-memory data
             raise ValueError(
                 "Pipeline requires simulation outputs to be saved. "
                 "Ensure config has settings.save: true"
@@ -68,16 +74,15 @@ def create_processor_factory():
         return SNNProcessor(
             spikes_path=spikes_path,
             clusters_path=clusters_path,
-            dt=raw_data.get("dt", 0.5e-3),
+            dt=raw_data.get("dt", dt),
         )
 
     return factory
 
 
-def create_custom_plotter() -> SeabornPlotter:
+def create_plotter() -> SeabornPlotter:
     """Create a SeabornPlotter with custom plot specifications."""
     specs = [
-        # Distribution of attractor durations
         PlotSpec(
             name="duration_distribution",
             plot_type="hist",
@@ -87,7 +92,6 @@ def create_custom_plotter() -> SeabornPlotter:
             ylabel="Count",
             kwargs={"bins": 30, "kde": True},
         ),
-        # If we have repeats, show duration by repeat
         PlotSpec(
             name="duration_by_repeat",
             plot_type="box",
@@ -97,13 +101,12 @@ def create_custom_plotter() -> SeabornPlotter:
             xlabel="Repeat",
             ylabel="Duration (ms)",
         ),
-        # Scatter plot of start vs duration
         PlotSpec(
             name="start_vs_duration",
             plot_type="scatter",
             x="start",
             y="duration_ms",
-            hue="repeat" if True else None,  # Will use repeat if available
+            hue="repeat",
             title="Attractor Start Time vs Duration",
             xlabel="Start Time (s)",
             ylabel="Duration (ms)",
@@ -116,7 +119,7 @@ def create_custom_plotter() -> SeabornPlotter:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run experiment pipeline with plotting",
+        description="Run experiment pipeline with unified processing",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -129,7 +132,7 @@ def main() -> int:
     parser.add_argument(
         "--save-dir",
         type=Path,
-        default=REPO_ROOT / "experiments" / "pipeline_demo",
+        default=REPO_ROOT / "experiments" / "pipeline_example",
         help="Directory to save results",
     )
     parser.add_argument(
@@ -156,6 +159,11 @@ def main() -> int:
         help="Enable parallel execution",
     )
     parser.add_argument(
+        "--unified",
+        action="store_true",
+        help="Use unified processing for consistent attractor IDs across repeats",
+    )
+    parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
@@ -178,17 +186,22 @@ def main() -> int:
         return 1
 
     logger.info(f"Running pipeline example with config: {args.config}")
-    logger.info(f"Mode: {args.mode}, Save dir: {args.save_dir}")
+    logger.info(f"Mode: {args.mode}, Unified: {args.unified}, Save dir: {args.save_dir}")
 
     # Create pipeline components
     simulator_factory = create_simulator_factory(args.config)
     processor_factory = create_processor_factory()
-    plotter = create_custom_plotter()
+
+    # Create batch processor factory if unified processing is enabled
+    batch_processor_factory = SNNBatchProcessorFactory() if args.unified else None
+
+    plotter = create_plotter()
 
     # Create pipeline
     pipeline = Pipeline(
         simulator_factory=simulator_factory,
         processor_factory=processor_factory,
+        batch_processor_factory=batch_processor_factory,
         analyzer_factory=SNNAnalyzer,
         plotter=plotter,
     )
@@ -211,6 +224,7 @@ def main() -> int:
         "log_level": args.log_level,
         "save_processed": True,
         "save_plots": True,
+        "unified_processing": args.unified,
     }
 
     if mode in (ExecutionMode.REPEATED, ExecutionMode.SWEEP_REPEATED):
@@ -236,6 +250,7 @@ def main() -> int:
     logger.info("PIPELINE RESULTS SUMMARY")
     logger.info("=" * 60)
     logger.info(f"Mode: {result.mode.name}")
+    logger.info(f"Unified Processing: {args.unified}")
     logger.info(f"Duration: {result.duration_seconds:.2f}s")
     logger.info(f"Seeds used: {result.seeds_used}")
     logger.info(f"DataFrames: {list(result.dataframes.keys())}")
@@ -253,6 +268,12 @@ def main() -> int:
         df = result.dataframes["aggregated"]
         logger.info(f"Aggregated DataFrame shape: {df.shape}")
         logger.info(f"Columns: {list(df.columns)}")
+
+        # Show metadata columns if present
+        if "repeat" in df.columns:
+            logger.info(f"Unique repeats: {sorted(df['repeat'].dropna().unique())}")
+        if "sweep_value" in df.columns:
+            logger.info(f"Unique sweep values: {sorted(df['sweep_value'].dropna().unique())}")
 
     logger.info("=" * 60)
     logger.info(f"Results saved to: {args.save_dir}")

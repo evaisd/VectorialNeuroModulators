@@ -123,11 +123,19 @@ class MockAnalyzer:
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert to DataFrame."""
-        return pd.DataFrame({
+        df = pd.DataFrame({
             "attractor_id": self._processed_data["attractor_ids"],
             "start": self._processed_data["starts"],
             "duration_ms": self._processed_data["durations"],
         })
+        # Add metadata columns if present (from batch processing)
+        if "repeat_indices" in self._processed_data:
+            df["repeat"] = self._processed_data["repeat_indices"]
+        if "seeds" in self._processed_data:
+            df["seed"] = self._processed_data["seeds"]
+        if "sweep_values" in self._processed_data:
+            df["sweep_value"] = self._processed_data["sweep_values"]
+        return df
 
     def get_summary_metrics(self) -> dict:
         """Compute summary metrics."""
@@ -139,6 +147,100 @@ class MockAnalyzer:
             "std_duration_ms": float(np.std(durations)),
             "total_duration_ms": float(np.sum(durations)),
         }
+
+
+class MockBatchProcessor:
+    """Mock batch processor for unified processing of multiple runs."""
+
+    def __init__(
+        self,
+        raw_outputs: list[MockSimulationOutput],
+        metadata: list[dict],
+    ):
+        self.raw_outputs = raw_outputs
+        self.metadata = metadata
+        self._processed_data: dict | None = None
+
+    @property
+    def processed_data(self) -> dict | None:
+        return self._processed_data
+
+    def process_batch(
+        self,
+        raw_outputs: list[MockSimulationOutput],
+        metadata: list[dict],
+    ) -> dict:
+        """Process all outputs together for consistent attractor IDs."""
+        # Combine all data from all runs
+        all_attractor_ids = []
+        all_starts = []
+        all_durations = []
+        all_repeat_indices = []
+        all_seeds = []
+        all_sweep_values = []
+
+        cumulative_time = 0.0
+        total_n_attractors = 0
+
+        for raw, meta in zip(raw_outputs, metadata):
+            # Process each run
+            rng = np.random.default_rng(raw.seed)
+            n_occurrences = len(raw.spikes)
+
+            # Generate mock attractor data
+            attractor_ids = rng.integers(0, raw.n_attractors, n_occurrences)
+            starts = np.sort(rng.uniform(0, 100, n_occurrences)) + cumulative_time
+            durations = rng.exponential(5, n_occurrences)
+
+            all_attractor_ids.extend(attractor_ids.tolist())
+            all_starts.extend(starts.tolist())
+            all_durations.extend(durations.tolist())
+
+            # Embed metadata for each occurrence
+            all_repeat_indices.extend([meta.get("repeat_idx")] * n_occurrences)
+            all_seeds.extend([meta.get("seed")] * n_occurrences)
+            all_sweep_values.extend([meta.get("sweep_value")] * n_occurrences)
+
+            cumulative_time = starts[-1] + 10  # Gap between runs
+            total_n_attractors = max(total_n_attractors, raw.n_attractors)
+
+        self._processed_data = {
+            "attractor_ids": np.array(all_attractor_ids),
+            "starts": np.array(all_starts),
+            "durations": np.array(all_durations),
+            "repeat_indices": all_repeat_indices,
+            "seeds": all_seeds,
+            "sweep_values": all_sweep_values,
+            "n_attractors": total_n_attractors,
+        }
+        return self._processed_data
+
+    def save(self, path: Path) -> None:
+        """Save processed data."""
+        path.mkdir(parents=True, exist_ok=True)
+        if self._processed_data:
+            np.savez(path / "batch_processed.npz", **self._processed_data)
+
+    @classmethod
+    def load_processed(cls, path: Path) -> dict:
+        """Load processed data."""
+        return dict(np.load(path / "batch_processed.npz", allow_pickle=True))
+
+
+class MockBatchProcessorFactory:
+    """Factory for creating MockBatchProcessor instances."""
+
+    def __call__(
+        self,
+        raw_outputs: list[MockSimulationOutput],
+        metadata: list[dict],
+        **kwargs,
+    ) -> MockBatchProcessor:
+        return MockBatchProcessor(raw_outputs, metadata)
+
+    @property
+    def supports_batch(self) -> bool:
+        return True
 
 
 # =============================================================================
@@ -292,9 +394,9 @@ def demo_sweep():
 
 
 def demo_sweep_repeated():
-    """Demonstrate sweep with repeats mode."""
+    """Demonstrate sweep with repeats mode (per-run processing)."""
     print("\n" + "=" * 60)
-    print("DEMO: Sweep + Repeated (4 values x 3 repeats)")
+    print("DEMO: Sweep + Repeated (4 values x 3 repeats) - Per-Run Processing")
     print("=" * 60)
 
     def sweep_simulator_factory(seed: int, sweep_param=None, sweep_value=None, **kwargs):
@@ -314,7 +416,8 @@ def demo_sweep_repeated():
         sweep_param="n_attractors",
         sweep_values=[5, 10, 15, 20],
         base_seed=789,
-        parallel=False,  # Set True for parallel execution
+        unified_processing=False,  # Per-run processing (old behavior)
+        parallel=False,
         save_dir=REPO_ROOT / "experiments" / "demo_sweep_repeated",
         log_level="INFO",
     ))
@@ -328,6 +431,91 @@ def demo_sweep_repeated():
         print(f"    {k}: {v:.4f}" if isinstance(v, float) else f"    {k}: {v}")
 
 
+def demo_unified_repeated():
+    """Demonstrate unified processing for repeated runs."""
+    print("\n" + "=" * 60)
+    print("DEMO: Repeated Runs with UNIFIED Processing (5 repeats)")
+    print("=" * 60)
+    print("All repeats processed together for consistent attractor IDs.")
+
+    pipeline = Pipeline(
+        simulator_factory=mock_simulator_factory,
+        processor_factory=mock_processor_factory,
+        batch_processor_factory=MockBatchProcessorFactory(),  # Enable batch processing
+        analyzer_factory=MockAnalyzer,
+        plotter=SeabornPlotter(auto_generate=True),
+    )
+
+    result = pipeline.run(PipelineConfig(
+        mode=ExecutionMode.REPEATED,
+        n_repeats=5,
+        base_seed=111,
+        unified_processing=True,  # Process all repeats together
+        save_dir=REPO_ROOT / "experiments" / "demo_unified_repeated",
+        log_level="INFO",
+    ))
+
+    print(f"\nResults:")
+    print(f"  Duration: {result.duration_seconds:.2f}s")
+    print(f"  Seeds used: {result.seeds_used}")
+    agg_df = result.dataframes.get("aggregated")
+    if agg_df is not None:
+        print(f"  Aggregated DataFrame shape: {agg_df.shape}")
+        print(f"  Columns: {list(agg_df.columns)}")
+        if "repeat" in agg_df.columns:
+            print(f"  Unique repeats in data: {sorted(agg_df['repeat'].dropna().unique())}")
+
+
+def demo_unified_sweep_repeated():
+    """Demonstrate unified processing for sweep with repeats.
+
+    Hierarchy: sweep_value -> attractors
+    - Different sweep values have different dynamics (separate attractor sets)
+    - Repeats within each sweep value are unified (consistent IDs)
+    """
+    print("\n" + "=" * 60)
+    print("DEMO: Sweep + Repeated with UNIFIED Processing")
+    print("=" * 60)
+    print("Hierarchy: sweep_value -> attractors")
+    print("  - Each sweep value processed separately (different dynamics)")
+    print("  - Repeats within each sweep value unified (consistent IDs)")
+
+    def sweep_simulator_factory(seed: int, sweep_param=None, sweep_value=None, **kwargs):
+        n_attractors = int(sweep_value) if sweep_value else 10
+        return MockSimulator(seed=seed, n_attractors=n_attractors, n_occurrences=100)
+
+    pipeline = Pipeline(
+        simulator_factory=sweep_simulator_factory,
+        processor_factory=mock_processor_factory,
+        batch_processor_factory=MockBatchProcessorFactory(),  # Enable batch processing
+        analyzer_factory=MockAnalyzer,
+        plotter=SeabornPlotter(auto_generate=True),
+    )
+
+    result = pipeline.run(PipelineConfig(
+        mode=ExecutionMode.SWEEP_REPEATED,
+        n_repeats=3,
+        sweep_param="n_attractors",
+        sweep_values=[5, 10, 15],
+        base_seed=222,
+        unified_processing=True,  # Unified per sweep value
+        save_dir=REPO_ROOT / "experiments" / "demo_unified_sweep_repeated",
+        log_level="INFO",
+    ))
+
+    print(f"\nResults:")
+    print(f"  Duration: {result.duration_seconds:.2f}s")
+    print(f"  Sweep values: {result.sweep_metadata['values']}")
+    agg_df = result.dataframes.get("aggregated")
+    if agg_df is not None:
+        print(f"  Aggregated DataFrame shape: {agg_df.shape}")
+        print(f"  Columns: {list(agg_df.columns)}")
+        if "sweep_value" in agg_df.columns:
+            print(f"  Unique sweep values: {sorted(agg_df['sweep_value'].dropna().unique())}")
+        if "repeat" in agg_df.columns:
+            print(f"  Unique repeats: {sorted(agg_df['repeat'].dropna().unique())}")
+
+
 def main():
     """Run all demos."""
     print("=" * 60)
@@ -336,17 +524,22 @@ def main():
     print("\nThis demo shows the Pipeline workflow using mock components.")
     print("Replace MockSimulator/Processor/Analyzer with real ones for production.")
 
-    # Run demos
+    # Run demos - basic modes
     demo_single_run()
     demo_repeated_runs()
     demo_sweep()
     demo_sweep_repeated()
+
+    # Unified processing demos
+    demo_unified_repeated()
+    demo_unified_sweep_repeated()
 
     print("\n" + "=" * 60)
     print("DEMO COMPLETE")
     print("=" * 60)
     print(f"\nResults saved to: {REPO_ROOT / 'experiments'}")
     print("Check the 'plots' subdirectory in each experiment folder for figures.")
+    print("\nUnified processing ensures consistent attractor IDs across repeats.")
 
     return 0
 
