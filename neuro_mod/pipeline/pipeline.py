@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import pickle
 import time
+from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Generic, TypeVar
@@ -15,6 +17,7 @@ from neuro_mod.pipeline.config import ExecutionMode, PipelineConfig, PipelineRes
 from neuro_mod.pipeline.io import get_git_commit, get_timestamp, save_result
 from neuro_mod.pipeline.protocols import (
     AnalyzerFactory,
+    BatchProcessorFactory,
     Plotter,
     ProcessorFactory,
     SimulatorFactory,
@@ -48,6 +51,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
         self,
         simulator_factory: SimulatorFactory[TRaw],
         processor_factory: ProcessorFactory[TRaw, TProcessed] | None = None,
+        batch_processor_factory: BatchProcessorFactory[TRaw, TProcessed] | None = None,
         analyzer_factory: AnalyzerFactory[TProcessed] | None = None,
         plotter: Plotter | None = None,
         logger: logging.Logger | None = None,
@@ -56,13 +60,17 @@ class Pipeline(Generic[TRaw, TProcessed]):
 
         Args:
             simulator_factory: Factory creating Simulator instances (called with seed).
-            processor_factory: Optional factory creating Processor instances.
+            processor_factory: Optional factory creating Processor instances (per-run).
+            batch_processor_factory: Optional factory for unified batch processing.
+                If provided and unified_processing=True, processes all repeats together
+                for consistent attractor IDs across runs.
             analyzer_factory: Optional factory creating Analyzer instances.
             plotter: Optional Plotter instance for visualization.
             logger: Optional logger instance.
         """
         self.simulator_factory = simulator_factory
         self.processor_factory = processor_factory
+        self.batch_processor_factory = batch_processor_factory
         self.analyzer_factory = analyzer_factory
         self.plotter = plotter
         self._logger = logger
@@ -172,6 +180,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
         """Execute single simulation run."""
         self.logger.info(f"Running single simulation (seed={seed})")
         raw = self._simulate(seed, config)
+        raw = self._persist_raw_output(raw, config, "single")
         self._process_and_analyze(config, result, raw, key="single")
 
         if config.run_plotting:
@@ -183,31 +192,60 @@ class Pipeline(Generic[TRaw, TProcessed]):
         result: PipelineResult,
         seeds: list[int],
     ) -> None:
-        """Execute repeated runs with seed management."""
+        """Execute repeated runs with seed management.
+
+        If unified_processing=True and batch_processor_factory is configured,
+        all repeats are processed together for consistent attractor identities.
+        """
         n_total = len(seeds)
+        use_unified = config.unified_processing and self._supports_batch_processing()
+
+        # Phase 1: Run all simulations
+        raw_outputs: list[TRaw] = []
+        metadata: list[dict[str, Any]] = []
 
         if config.parallel and n_total > 1:
-            self._run_repeated_parallel(config, result, seeds)
+            raw_outputs, metadata = self._simulate_repeated_parallel(config, seeds)
         else:
             for i, seed in enumerate(seeds):
                 self.logger.info(f"Running repeat {i + 1}/{n_total} (seed={seed})")
                 self._report_progress(config, i, n_total, f"repeat {i + 1}/{n_total}")
                 raw = self._simulate(seed, config)
-                self._process_and_analyze(config, result, raw, key=f"repeat_{i}")
+                raw = self._persist_raw_output(raw, config, f"repeat_{i}")
+                raw_outputs.append(raw)
+                metadata.append({"seed": seed, "repeat_idx": i})
 
-        # Aggregate across repeats
-        self._aggregate_repeated_results(config, result)
+        # Phase 2: Processing and Analysis
+        if use_unified:
+            # Unified processing: all repeats together
+            self._process_and_analyze_unified(
+                config, result, raw_outputs, metadata, key="unified"
+            )
+            # Store as aggregated since it's already unified
+            if "unified" in result.dataframes:
+                result.dataframes["aggregated"] = result.dataframes["unified"]
+            if "unified" in result.metrics:
+                result.metrics["aggregated"] = result.metrics["unified"]
+        else:
+            # Fallback: per-run processing
+            for i, (raw, meta) in enumerate(zip(raw_outputs, metadata)):
+                self._process_and_analyze(config, result, raw, key=f"repeat_{i}")
+            # Aggregate across repeats
+            self._aggregate_repeated_results(config, result)
 
         if config.run_plotting:
             self._generate_plots(config, result, "aggregated")
 
-    def _run_repeated_parallel(
+    def _simulate_repeated_parallel(
         self,
         config: PipelineConfig,
-        result: PipelineResult,
         seeds: list[int],
-    ) -> None:
-        """Execute repeated runs in parallel."""
+    ) -> tuple[list[TRaw], list[dict[str, Any]]]:
+        """Run simulations in parallel, returning outputs and metadata.
+
+        Returns:
+            Tuple of (raw_outputs, metadata) lists, ordered by repeat index.
+        """
         ExecutorClass = (
             ProcessPoolExecutor if config.executor == "process"
             else ThreadPoolExecutor
@@ -215,6 +253,10 @@ class Pipeline(Generic[TRaw, TProcessed]):
         n_total = len(seeds)
 
         self.logger.info(f"Running {n_total} repeats in parallel ({config.executor} executor)")
+
+        # Pre-allocate lists to maintain order
+        raw_outputs: list[TRaw | None] = [None] * n_total
+        metadata: list[dict[str, Any]] = [{}] * n_total
 
         with ExecutorClass(max_workers=config.max_workers) as executor:
             futures = {
@@ -226,12 +268,16 @@ class Pipeline(Generic[TRaw, TProcessed]):
                 i, seed = futures[future]
                 try:
                     raw = future.result()
+                    raw = self._persist_raw_output(raw, config, f"repeat_{i}")
+                    raw_outputs[i] = raw
+                    metadata[i] = {"seed": seed, "repeat_idx": i}
                     self.logger.debug(f"Repeat {i} complete (seed={seed})")
-                    self._process_and_analyze(config, result, raw, key=f"repeat_{i}")
                     self._report_progress(config, i + 1, n_total, f"repeat {i + 1} done")
                 except Exception as exc:
                     self.logger.error(f"Repeat {i} failed: {exc}")
                     raise
+
+        return raw_outputs, metadata  # type: ignore[return-value]
 
     def _run_sweep(
         self,
@@ -254,6 +300,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
             self._report_progress(config, i, n_values, f"sweep {i + 1}/{n_values}")
 
             raw = self._simulate_with_param(seed, config, config.sweep_param, value)
+            raw = self._persist_raw_output(raw, config, f"sweep_{i}")
             self._process_and_analyze(config, result, raw, key=f"sweep_{i}")
 
         self._aggregate_sweep_results(config, result)
@@ -267,7 +314,12 @@ class Pipeline(Generic[TRaw, TProcessed]):
         result: PipelineResult,
         seeds: list[int],
     ) -> None:
-        """Execute sweep with repeats at each parameter value."""
+        """Execute sweep with repeats at each parameter value.
+
+        Hierarchy: sweep_param → attractors
+        - Different sweep values produce different dynamics (not comparable)
+        - Repeats within each sweep value are unified for consistent attractor IDs
+        """
         assert config.sweep_param is not None
         assert config.sweep_values is not None
 
@@ -280,6 +332,11 @@ class Pipeline(Generic[TRaw, TProcessed]):
         n_values = len(config.sweep_values)
         n_repeats = len(seeds)
         n_total = n_values * n_repeats
+        use_unified = config.unified_processing and self._supports_batch_processing()
+
+        # Phase 1: Run all simulations, grouped by sweep value
+        raw_by_sweep: dict[int, list[TRaw]] = defaultdict(list)
+        meta_by_sweep: dict[int, list[dict[str, Any]]] = defaultdict(list)
         step = 0
 
         for i, value in enumerate(config.sweep_values):
@@ -291,9 +348,33 @@ class Pipeline(Generic[TRaw, TProcessed]):
                 self._report_progress(config, step, n_total, f"sweep {i + 1}, repeat {j + 1}")
 
                 raw = self._simulate_with_param(seed, config, config.sweep_param, value)
-                self._process_and_analyze(config, result, raw, key=f"sweep_{i}_repeat_{j}")
+                raw = self._persist_raw_output(raw, config, f"sweep_{i}_repeat_{j}")
+                raw_by_sweep[i].append(raw)
+                meta_by_sweep[i].append({
+                    "seed": seed,
+                    "repeat_idx": j,
+                    "sweep_value": value,
+                    "sweep_idx": i,
+                })
                 step += 1
 
+        # Phase 2: Unified processing PER SWEEP VALUE
+        for i, value in enumerate(config.sweep_values):
+            if use_unified:
+                # Process all repeats for this sweep value together
+                self._process_and_analyze_unified(
+                    config, result,
+                    raw_by_sweep[i],
+                    meta_by_sweep[i],
+                    key=f"sweep_{i}",
+                    sweep_value=value,
+                )
+            else:
+                # Fallback: process each repeat separately
+                for j, (raw, meta) in enumerate(zip(raw_by_sweep[i], meta_by_sweep[i])):
+                    self._process_and_analyze(config, result, raw, key=f"sweep_{i}_repeat_{j}")
+
+        # Phase 3: Aggregate across sweep values
         self._aggregate_sweep_repeated_results(config, result)
 
         if config.run_plotting:
@@ -328,6 +409,46 @@ class Pipeline(Generic[TRaw, TProcessed]):
         self.logger.debug(f"Simulation complete (seed={seed})")
         return result
 
+    def _persist_raw_output(
+        self,
+        raw: TRaw,
+        config: PipelineConfig,
+        key: str,
+    ) -> TRaw:
+        """Persist raw outputs to disk and inject file paths when possible."""
+        if not config.save_raw or config.save_dir is None:
+            return raw
+
+        data_dir = config.save_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        if isinstance(raw, dict):
+            if "spikes_path" not in raw:
+                spikes = raw.get("spikes")
+                if spikes is not None:
+                    clusters = raw.get("clusters")
+                    spikes_path = data_dir / f"{key}_spikes.npz"
+                    if clusters is not None:
+                        np.savez_compressed(spikes_path, spikes=spikes, clusters=clusters)
+                    else:
+                        spikes_path = spikes_path.with_suffix(".npy")
+                        np.save(spikes_path, spikes)
+                    updated = dict(raw)
+                    updated["spikes_path"] = str(spikes_path)
+                    updated.setdefault("clusters_path", None)
+                    return updated
+
+            raw_path = data_dir / f"{key}_raw.npy"
+            np.save(raw_path, raw, allow_pickle=True)
+            updated = dict(raw)
+            updated.setdefault("raw_path", str(raw_path))
+            return updated
+
+        raw_path = data_dir / f"{key}_raw.pkl"
+        with open(raw_path, "wb") as handle:
+            pickle.dump(raw, handle)
+        return raw
+
     def _process_and_analyze(
         self,
         config: PipelineConfig,
@@ -360,6 +481,85 @@ class Pipeline(Generic[TRaw, TProcessed]):
             analyzer = self.analyzer_factory(processed)
             result.dataframes[key] = analyzer.to_dataframe()
             result.metrics[key] = analyzer.get_summary_metrics()
+            if hasattr(analyzer, "get_time_evolution_dataframe"):
+                time_df = analyzer.get_time_evolution_dataframe()
+                if not time_df.empty:
+                    result.dataframes[f"{key}_time"] = time_df
+
+    def _supports_batch_processing(self) -> bool:
+        """Check if the pipeline supports batch processing.
+
+        Returns:
+            True if batch_processor_factory is configured and supports batch mode.
+        """
+        if self.batch_processor_factory is None:
+            return False
+        # Check for supports_batch property (from BatchProcessorFactory protocol)
+        return getattr(self.batch_processor_factory, "supports_batch", True)
+
+    def _process_and_analyze_unified(
+        self,
+        config: PipelineConfig,
+        result: PipelineResult,
+        raw_outputs: list[TRaw],
+        metadata: list[dict[str, Any]],
+        key: str,
+        sweep_value: Any = None,
+    ) -> None:
+        """Process and analyze all runs together for consistent attractor IDs.
+
+        Args:
+            config: Pipeline configuration.
+            result: PipelineResult to populate.
+            raw_outputs: List of raw simulation outputs.
+            metadata: List of metadata dicts, one per output. Each contains:
+                - seed: Random seed used
+                - repeat_idx: Index of the repeat (0, 1, 2, ...)
+                - sweep_value: Sweep parameter value (if applicable)
+                - sweep_idx: Index of sweep value (if applicable)
+            key: Key for storing results (e.g., "unified" or "sweep_0").
+            sweep_value: Optional sweep value for logging.
+        """
+        n_runs = len(raw_outputs)
+        self.logger.info(
+            f"Unified processing of {n_runs} runs"
+            + (f" (sweep_value={sweep_value})" if sweep_value is not None else "")
+        )
+
+        # Store raw outputs if requested
+        if config.save_raw:
+            for i, (raw, meta) in enumerate(zip(raw_outputs, metadata)):
+                raw_key = f"{key}_run_{i}"
+                result.raw_outputs[raw_key] = raw
+
+        processed: Any = None
+
+        # Processing phase - unified batch processing
+        if config.run_processing and self.batch_processor_factory is not None:
+            self.logger.debug(f"Batch processing {n_runs} runs for '{key}'")
+            batch_processor = self.batch_processor_factory(raw_outputs, metadata)
+            processed = batch_processor.process_batch(raw_outputs, metadata)
+            result.processed_data[key] = processed
+
+            if config.save_processed and config.save_dir:
+                batch_processor.save(config.save_dir / "processed" / key)
+
+        # Analysis phase
+        if config.run_analysis and self.analyzer_factory is not None and processed is not None:
+            self.logger.debug(f"Analyzing unified data for '{key}'")
+            analyzer = self.analyzer_factory(processed)
+            df = analyzer.to_dataframe()
+
+            # Ensure metadata columns are present
+            if sweep_value is not None and "sweep_value" not in df.columns:
+                df["sweep_value"] = sweep_value
+
+            result.dataframes[key] = df
+            result.metrics[key] = analyzer.get_summary_metrics()
+            if hasattr(analyzer, "get_time_evolution_dataframe"):
+                time_df = analyzer.get_time_evolution_dataframe()
+                if not time_df.empty:
+                    result.dataframes[f"{key}_time"] = time_df
 
     def _aggregate_repeated_results(
         self,
@@ -426,30 +626,64 @@ class Pipeline(Generic[TRaw, TProcessed]):
         config: PipelineConfig,
         result: PipelineResult,
     ) -> None:
-        """Aggregate results from sweep with repeats."""
+        """Aggregate results from sweep with repeats.
+
+        Handles both unified mode (sweep_N keys with repeat embedded in data)
+        and per-run mode (sweep_N_repeat_M keys).
+        """
         self.logger.info("Aggregating sweep+repeat results")
 
         assert config.sweep_values is not None
 
         dfs = []
-        for i, value in enumerate(config.sweep_values):
-            for j in range(config.n_repeats):
-                key = f"sweep_{i}_repeat_{j}"
+
+        # Check if we're in unified mode (sweep_N keys exist without repeat suffix)
+        unified_mode = any(
+            f"sweep_{i}" in result.dataframes
+            for i in range(len(config.sweep_values))
+        )
+
+        if unified_mode:
+            # Unified mode: sweep_N DataFrames already contain repeat info
+            for i, value in enumerate(config.sweep_values):
+                key = f"sweep_{i}"
                 if key in result.dataframes:
                     df = result.dataframes[key].copy()
-                    df["sweep_value"] = value
-                    df["sweep_idx"] = i
-                    df["repeat"] = j
+                    # sweep_value should already be set, but ensure it
+                    if "sweep_value" not in df.columns:
+                        df["sweep_value"] = value
+                    if "sweep_idx" not in df.columns:
+                        df["sweep_idx"] = i
                     dfs.append(df)
+        else:
+            # Per-run mode: sweep_N_repeat_M keys
+            for i, value in enumerate(config.sweep_values):
+                for j in range(config.n_repeats):
+                    key = f"sweep_{i}_repeat_{j}"
+                    if key in result.dataframes:
+                        df = result.dataframes[key].copy()
+                        df["sweep_value"] = value
+                        df["sweep_idx"] = i
+                        df["repeat"] = j
+                        dfs.append(df)
 
         if dfs:
             result.dataframes["aggregated"] = pd.concat(dfs, ignore_index=True)
 
         # Aggregate metrics
-        all_metrics = [
-            m for k, m in result.metrics.items()
-            if k.startswith("sweep_") and "_repeat_" in k
-        ]
+        if unified_mode:
+            # Unified mode: metrics from sweep_N keys
+            all_metrics = [
+                m for k, m in result.metrics.items()
+                if k.startswith("sweep_") and "_repeat_" not in k and k != "aggregated"
+            ]
+        else:
+            # Per-run mode: metrics from sweep_N_repeat_M keys
+            all_metrics = [
+                m for k, m in result.metrics.items()
+                if k.startswith("sweep_") and "_repeat_" in k
+            ]
+
         if all_metrics:
             result.metrics["aggregated"] = self._compute_aggregate_metrics(all_metrics)
 
