@@ -82,6 +82,16 @@ class PipelineConfig:
     run_analysis: bool = True
     run_plotting: bool = True
 
+    # Processing mode
+    unified_processing: bool = True
+    """If True, process all repeats together for consistent attractor IDs.
+
+    For REPEATED mode: all repeats processed together.
+    For SWEEP mode: each sweep value processed separately (no unification).
+    For SWEEP_REPEATED mode: repeats within each sweep value processed together,
+        but different sweep values processed separately (different dynamics).
+    """
+
     # Logging
     log_level: str = "INFO"
     log_to_file: bool = True
@@ -126,6 +136,7 @@ class PipelineConfig:
             "run_processing": self.run_processing,
             "run_analysis": self.run_analysis,
             "run_plotting": self.run_plotting,
+            "unified_processing": self.unified_processing,
             "log_level": self.log_level,
             "log_to_file": self.log_to_file,
         }
