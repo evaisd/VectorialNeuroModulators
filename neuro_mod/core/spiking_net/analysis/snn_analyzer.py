@@ -111,10 +111,19 @@ class SNNAnalyzer(_BaseAnalyzer):
     def to_dataframe(self) -> pd.DataFrame:
         """Convert attractors_data to a pandas DataFrame.
 
-        Returns:
-            DataFrame with columns: attractor_id, clusters, start, end,
-            duration_ms, occurrence_idx. If batch processing was used,
-            also includes: repeat, seed, sweep_value, sweep_idx.
+        Returns a DataFrame indexed by occurrences sorted by time, with columns:
+            - idx: Global occurrence index (sorted by t_start)
+            - clusters: Cluster pattern identity
+            - attractor_idx: Integer ID for this attractor
+            - t_start: Start time of occurrence
+            - t_end: End time of occurrence
+            - duration: Duration of occurrence (ms)
+            - occurrence: Per-attractor occurrence number (1st, 2nd, ... time this attractor appeared)
+            - prev_attractor_idx: Attractor idx of the temporally previous occurrence
+            - next_attractor_idx: Attractor idx of the temporally next occurrence
+            - num_clusters: Number of active clusters in this attractor
+
+        If batch processing was used, also includes: repeat, seed, sweep_value, sweep_idx.
         """
         rows = []
         for identity, entry in self.attractors_data.items():
@@ -122,6 +131,14 @@ class SNNAnalyzer(_BaseAnalyzer):
             starts = entry.get("starts", [])
             ends = entry.get("ends", [])
             durations = entry.get("occurrence_durations", [])
+
+            # Count clusters in identity
+            if isinstance(identity, (frozenset, set)):
+                num_clusters = len(identity)
+            elif isinstance(identity, (tuple, list)):
+                num_clusters = len(identity)
+            else:
+                num_clusters = 1
 
             # Check for batch processing metadata
             repeat_indices = entry.get("repeat_indices", [])
@@ -132,12 +149,13 @@ class SNNAnalyzer(_BaseAnalyzer):
 
             for i, (start, end, dur) in enumerate(zip(starts, ends, durations)):
                 row = {
-                    "attractor_id": attractor_id,
                     "clusters": identity,
-                    "start": start,
-                    "end": end,
-                    "duration_ms": dur,
-                    "occurrence_idx": i,
+                    "attractor_idx": attractor_id,
+                    "t_start": start,
+                    "t_end": end,
+                    "duration": dur,
+                    "num_clusters": num_clusters,
+                    "_per_attractor_idx": i,  # Temporary, for computing occurrence
                 }
 
                 # Add metadata columns if present
@@ -154,8 +172,45 @@ class SNNAnalyzer(_BaseAnalyzer):
                 rows.append(row)
 
         df = pd.DataFrame(rows)
-        if not df.empty:
-            df = df.sort_values(["start", "attractor_id"]).reset_index(drop=True)
+        if df.empty:
+            return df
+
+        # Sort by time and assign global index
+        df = df.sort_values("t_start").reset_index(drop=True)
+        df.index.name = "idx"
+        df = df.reset_index()
+
+        # Compute per-attractor occurrence number (1-indexed)
+        df["occurrence"] = df.groupby("attractor_idx").cumcount() + 1
+
+        # Compute prev/next attractor idx (temporal neighbors)
+        df["prev_attractor_idx"] = df["attractor_idx"].shift(1)
+        df["next_attractor_idx"] = df["attractor_idx"].shift(-1)
+
+        # Convert to nullable int for prev/next (NaN at boundaries)
+        df["prev_attractor_idx"] = df["prev_attractor_idx"].astype("Int64")
+        df["next_attractor_idx"] = df["next_attractor_idx"].astype("Int64")
+
+        # Drop temporary column and reorder
+        df = df.drop(columns=["_per_attractor_idx"])
+
+        # Define column order
+        base_cols = [
+            "idx",
+            "clusters",
+            "attractor_idx",
+            "t_start",
+            "t_end",
+            "duration",
+            "occurrence",
+            "prev_attractor_idx",
+            "next_attractor_idx",
+            "num_clusters",
+        ]
+        # Add metadata columns at the end if present
+        extra_cols = [c for c in df.columns if c not in base_cols]
+        df = df[base_cols + extra_cols]
+
         return df
 
     def get_summary_metrics(self) -> dict[str, Any]:

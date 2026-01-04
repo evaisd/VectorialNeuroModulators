@@ -124,10 +124,14 @@ class MockAnalyzer:
     def to_dataframe(self) -> pd.DataFrame:
         """Convert to DataFrame."""
         df = pd.DataFrame({
-            "attractor_id": self._processed_data["attractor_ids"],
-            "start": self._processed_data["starts"],
-            "duration_ms": self._processed_data["durations"],
+            "attractor_idx": self._processed_data["attractor_ids"],
+            "t_start": self._processed_data["starts"],
+            "duration": self._processed_data["durations"],
         })
+        # Sort by time and assign global index
+        df = df.sort_values("t_start").reset_index(drop=True)
+        df.index.name = "idx"
+        df = df.reset_index()
         # Add metadata columns if present (from batch processing)
         if "repeat_indices" in self._processed_data:
             df["repeat"] = self._processed_data["repeat_indices"]
@@ -269,7 +273,7 @@ def create_demo_plotter() -> SeabornPlotter:
         PlotSpec(
             name="duration_histogram",
             plot_type="hist",
-            x="duration_ms",
+            x="duration",
             title="Attractor Duration Distribution",
             xlabel="Duration (ms)",
             ylabel="Count",
@@ -278,8 +282,8 @@ def create_demo_plotter() -> SeabornPlotter:
         PlotSpec(
             name="duration_over_time",
             plot_type="scatter",
-            x="start",
-            y="duration_ms",
+            x="t_start",
+            y="duration",
             title="Duration vs Start Time",
             xlabel="Start Time (s)",
             ylabel="Duration (ms)",
@@ -288,7 +292,7 @@ def create_demo_plotter() -> SeabornPlotter:
         PlotSpec(
             name="attractor_counts",
             plot_type="hist",
-            x="attractor_id",
+            x="attractor_idx",
             title="Attractor Occurrence Counts",
             xlabel="Attractor ID",
             ylabel="Count",

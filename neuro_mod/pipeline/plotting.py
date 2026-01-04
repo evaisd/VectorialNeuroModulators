@@ -100,8 +100,8 @@ class SeabornPlotter(BasePlotter):
 
         >>> # With custom specs
         >>> specs = [
-        ...     PlotSpec(name="scatter", plot_type="scatter", x="time", y="value", hue="group"),
-        ...     PlotSpec(name="hist", plot_type="hist", x="duration_ms"),
+        ...     PlotSpec(name="scatter", plot_type="scatter", x="t_start", y="duration", hue="group"),
+        ...     PlotSpec(name="hist", plot_type="hist", x="duration"),
         ... ]
         >>> plotter = SeabornPlotter(specs=specs)
     """

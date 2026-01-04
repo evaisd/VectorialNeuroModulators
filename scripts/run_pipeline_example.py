@@ -86,7 +86,7 @@ def create_plotter() -> SeabornPlotter:
         PlotSpec(
             name="duration_distribution",
             plot_type="hist",
-            x="duration_ms",
+            x="duration",
             title="Attractor Duration Distribution",
             xlabel="Duration (ms)",
             ylabel="Count",
@@ -96,7 +96,7 @@ def create_plotter() -> SeabornPlotter:
             name="duration_by_repeat",
             plot_type="box",
             x="repeat",
-            y="duration_ms",
+            y="duration",
             title="Duration Distribution by Repeat",
             xlabel="Repeat",
             ylabel="Duration (ms)",
@@ -104,8 +104,8 @@ def create_plotter() -> SeabornPlotter:
         PlotSpec(
             name="start_vs_duration",
             plot_type="scatter",
-            x="start",
-            y="duration_ms",
+            x="t_start",
+            y="duration",
             hue="repeat",
             title="Attractor Start Time vs Duration",
             xlabel="Start Time (s)",

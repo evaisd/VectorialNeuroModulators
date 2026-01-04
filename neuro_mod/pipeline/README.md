@@ -243,7 +243,7 @@ specs = [
     PlotSpec(
         name="duration_distribution",
         plot_type="hist",
-        x="duration_ms",
+        x="duration",
         title="Attractor Duration Distribution",
         xlabel="Duration (ms)",
         ylabel="Count",
@@ -252,8 +252,8 @@ specs = [
     PlotSpec(
         name="duration_over_time",
         plot_type="scatter",
-        x="start",
-        y="duration_ms",
+        x="t_start",
+        y="duration",
         hue="repeat",
         title="Duration Over Time",
         kwargs={"alpha": 0.5, "s": 10},
@@ -262,7 +262,7 @@ specs = [
         name="sweep_comparison",
         plot_type="box",
         x="sweep_value",
-        y="duration_ms",
+        y="duration",
         title="Duration by Sweep Value",
     ),
 ]
@@ -305,9 +305,9 @@ from neuro_mod.pipeline import MatplotlibPlotter
 
 def plot_attractor_stability(data, ax, metrics=None, **kwargs):
     """Mean duration vs occurrence count per attractor."""
-    summary = data.groupby("attractor_id").agg(
-        mean_duration=("duration_ms", "mean"),
-        count=("duration_ms", "count"),
+    summary = data.groupby("attractor_idx").agg(
+        mean_duration=("duration", "mean"),
+        count=("duration", "count"),
     )
     ax.scatter(summary["count"], summary["mean_duration"], alpha=0.6)
     ax.set_xlabel("Occurrence Count")
@@ -316,7 +316,7 @@ def plot_attractor_stability(data, ax, metrics=None, **kwargs):
 
 def plot_pareto(data, ax, metrics=None, **kwargs):
     """Cumulative time coverage by attractor rank."""
-    sorted_dur = data.groupby("attractor_id")["duration_ms"].sum()
+    sorted_dur = data.groupby("attractor_idx")["duration"].sum()
     sorted_dur = sorted_dur.sort_values(ascending=False).cumsum()
     ax.plot(range(len(sorted_dur)), sorted_dur / sorted_dur.max())
     ax.set_xlabel("Attractor Rank")
@@ -460,9 +460,9 @@ def create_processor_factory():
 # === Plotters ===
 
 def plot_stability(data, ax, metrics=None, **kwargs):
-    summary = data.groupby("attractor_id").agg(
-        mean_dur=("duration_ms", "mean"),
-        count=("duration_ms", "count"),
+    summary = data.groupby("attractor_idx").agg(
+        mean_dur=("duration", "mean"),
+        count=("duration", "count"),
     )
     ax.scatter(summary["count"], summary["mean_dur"], alpha=0.6, s=20)
     ax.set_xlabel("Occurrences")
@@ -475,15 +475,15 @@ main_plotter = SeabornPlotter(
         PlotSpec(
             name="duration_hist",
             plot_type="hist",
-            x="duration_ms",
+            x="duration",
             title="Duration Distribution",
             kwargs={"bins": 40, "kde": True},
         ),
         PlotSpec(
             name="duration_scatter",
             plot_type="scatter",
-            x="start",
-            y="duration_ms",
+            x="t_start",
+            y="duration",
             hue="repeat",
             title="Duration Over Time",
             kwargs={"alpha": 0.4, "s": 8},
@@ -531,7 +531,7 @@ print(f"Seeds: {result.seeds_used}")
 
 df = result.dataframes["aggregated"]
 print(f"Total occurrences: {len(df)}")
-print(f"Unique attractors: {df['attractor_id'].nunique()}")
+print(f"Unique attractors: {df['attractor_idx'].nunique()}")
 
 # Plot time evolution
 if "aggregated_time" in result.dataframes:
