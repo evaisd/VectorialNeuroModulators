@@ -2,13 +2,10 @@
 """Run repeated SNN simulations using the Pipeline architecture.
 
 This script runs SNN simulations with full reproducibility, processing,
-and optional unified attractor identification across repeats.
+and unified attractor identification across repeats.
 
 Usage:
     python scripts/run_snn.py --config configs/snn_long_run.yaml --n-repeats 10
-
-    # With unified processing (consistent attractor IDs across repeats)
-    python scripts/run_snn.py --config configs/snn_long_run.yaml --n-repeats 10 --unified
 
     # Parallel execution
     python scripts/run_snn.py --config configs/snn_long_run.yaml --n-repeats 10 --parallel
@@ -27,10 +24,11 @@ import pandas as pd
 import seaborn as sns
 
 from neuro_mod.pipeline import (
+    BasePlotter,
+    ComposablePlotter,
     ExecutionMode,
     Pipeline,
     PipelineConfig,
-    PipelineResult,
     SeabornPlotter,
     PlotSpec,
 )
@@ -39,9 +37,11 @@ from neuro_mod.core.spiking_net.processing import (
     SNNProcessor,
     SNNBatchProcessorFactory,
 )
+import yaml
+
 from neuro_mod.execution.stagers import StageSNNSimulation
 from neuro_mod.execution.helpers.cli import resolve_path, save_cmd
-from neuro_mod.visualization import folder_plots_to_pdf, journal_style
+from neuro_mod.visualization import folder_plots_to_pdf
 
 
 def _build_parser(root: Path) -> argparse.ArgumentParser:
@@ -63,7 +63,7 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
     parser.add_argument(
         "--n-repeats",
         type=int,
-        default=2,
+        default=125,
         help="Number of repeats to run.",
     )
     parser.add_argument(
@@ -95,12 +95,6 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
         help="Parallel executor backend.",
     )
     parser.add_argument(
-        "--unified",
-        action="store_true",
-        default=True,
-        help="Use unified processing for consistent attractor IDs across repeats.",
-    )
-    parser.add_argument(
         "--no-plots",
         action="store_true",
         help="Skip plot generation.",
@@ -120,6 +114,29 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
         help="Logging level.",
+    )
+    parser.add_argument(
+        "--verbose-memory",
+        action="store_true",
+        help="Log memory usage after each repeat (requires psutil for detailed info).",
+    )
+    parser.add_argument(
+        "--process-only",
+        action="store_true",
+        help="Skip simulation, process existing data files from save_dir/data.",
+    )
+    time_group = parser.add_mutually_exclusive_group()
+    time_group.add_argument(
+        "--time-dt-ms",
+        type=float,
+        default=None,
+        help="Time step in ms for time evolution dataframe density.",
+    )
+    time_group.add_argument(
+        "--time-steps",
+        type=int,
+        default=200,
+        help="Number of time steps for time evolution dataframe density.",
     )
     return parser
 
@@ -228,41 +245,63 @@ def create_occurrence_plotter() -> SeabornPlotter:
     return SeabornPlotter(specs=specs, apply_journal_style=True)
 
 
-# =============================================================================
-# Custom Matplotlib Plots (aggregated/analyzer-level)
-# =============================================================================
+class NamedMatplotlibPlotter(BasePlotter):
+    """Matplotlib plotter that saves figures with explicit names."""
+
+    def __init__(
+        self,
+        plot_specs: list[tuple[str, Any, tuple[float, float] | None]],
+        apply_journal_style: bool = True,
+    ) -> None:
+        self.plot_specs = plot_specs
+        if apply_journal_style:
+            try:
+                from neuro_mod.visualization import journal_style
+                journal_style.apply_journal_style()
+            except ImportError:
+                pass
+
+    def plot(
+        self,
+        data: pd.DataFrame,
+        metrics: dict[str, Any] | None = None,
+        save_dir: Path | None = None,
+        **kwargs: Any,
+    ) -> list[Any]:
+        figures: list[Any] = []
+        if save_dir:
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+        for name, plot_fn, figsize in self.plot_specs:
+            fig, ax = plt.subplots(figsize=figsize)
+            maybe_fig = plot_fn(data, ax, metrics=metrics, **kwargs)
+            fig_to_save = maybe_fig if hasattr(maybe_fig, "savefig") else fig
+            if fig_to_save is not fig:
+                plt.close(fig)
+            figures.append(fig_to_save)
+            if save_dir:
+                fig_to_save.savefig(save_dir / f"{name}.png", dpi=150, bbox_inches="tight")
+                plt.close(fig_to_save)
+        return figures
 
 
-def _aggregate_per_attractor(df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate occurrence DataFrame to per-attractor summary."""
-    if df.empty:
-        return pd.DataFrame()
-
-    agg = df.groupby("attractor_idx").agg(
-        occurrences=("idx", "count"),
-        total_duration=("duration", "sum"),
-        mean_duration=("duration", "mean"),
-        std_duration=("duration", "std"),
-        num_clusters=("num_clusters", "first"),
-        first_start=("t_start", "min"),
-        last_end=("t_end", "max"),
-    ).reset_index()
-    agg["std_duration"] = agg["std_duration"].fillna(0)
-    return agg
+def _get_per_attractor_df(
+    data: pd.DataFrame,
+    per_attractor_df: pd.DataFrame | None,
+) -> pd.DataFrame:
+    if per_attractor_df is not None and not per_attractor_df.empty:
+        return per_attractor_df
+    return SNNAnalyzer.aggregate_per_attractor_df(data)
 
 
-def generate_aggregated_plots(data: pd.DataFrame, save_dir: Path) -> None:
-    """Generate all aggregated attractor plots with proper naming."""
-    if data.empty:
-        return
-
-    journal_style.apply_journal_style()
-    agg = _aggregate_per_attractor(data)
+def plot_lifespan_vs_occurrences(
+    data: pd.DataFrame,
+    ax,
+    **kwargs: Any,
+) -> None:
+    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
     if agg.empty:
         return
-
-    # 03: Lifespan vs Occurrences (scatter, log x, colored by cluster size)
-    fig, ax = plt.subplots(figsize=(8, 5))
     unique_sizes = sorted(agg["num_clusters"].unique())
     cmap = plt.get_cmap("tab20", max(len(unique_sizes), 1))
     for i, size in enumerate(unique_sizes):
@@ -287,10 +326,16 @@ def generate_aggregated_plots(data: pd.DataFrame, save_dir: Path) -> None:
         loc="center left",
         bbox_to_anchor=(1.02, 0.5),
     )
-    fig.savefig(save_dir / "03_lifespan_vs_occurrences.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
 
-    # 04: Size Correlations (2-panel)
+
+def plot_size_correlations(
+    data: pd.DataFrame,
+    ax,
+    **kwargs: Any,
+):
+    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
+    if agg.empty:
+        return None
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     sizes = agg["num_clusters"].values
     occurrences = agg["occurrences"].values
@@ -313,11 +358,17 @@ def generate_aggregated_plots(data: pd.DataFrame, save_dir: Path) -> None:
     axes[1].set_title("Size vs Mean Lifespan")
 
     fig.suptitle("Attractor Size Correlations", fontsize=12, fontweight="bold")
-    fig.savefig(save_dir / "04_size_correlations.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    return fig
 
-    # 05: Mean Lifespan Histogram (per attractor)
-    fig, ax = plt.subplots(figsize=(7, 5))
+
+def plot_mean_lifespan_histogram(
+    data: pd.DataFrame,
+    ax,
+    **kwargs: Any,
+) -> None:
+    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
+    if agg.empty:
+        return
     sns.histplot(
         agg["mean_duration"],
         bins=40,
@@ -329,11 +380,16 @@ def generate_aggregated_plots(data: pd.DataFrame, save_dir: Path) -> None:
     ax.set_xlabel("Mean lifespan (ms)")
     ax.set_ylabel("Count")
     ax.set_title("Mean Lifespan Distribution (per attractor)")
-    fig.savefig(save_dir / "05_mean_lifespan_histogram.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
 
-    # 06: Mean Lifespan by Size (bar)
-    fig, ax = plt.subplots(figsize=(7, 5))
+
+def plot_mean_lifespan_by_size(
+    data: pd.DataFrame,
+    ax,
+    **kwargs: Any,
+) -> None:
+    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
+    if agg.empty:
+        return
     size_summary = agg.groupby("num_clusters").agg(
         mean_lifespan=("mean_duration", "mean"),
         sem_lifespan=("mean_duration", "sem"),
@@ -349,133 +405,144 @@ def generate_aggregated_plots(data: pd.DataFrame, save_dir: Path) -> None:
     ax.set_xlabel("Attractor size (cluster count)")
     ax.set_ylabel("Mean lifespan (ms)")
     ax.set_title("Mean Lifespan by Attractor Size")
-    fig.savefig(save_dir / "06_mean_lifespan_by_size.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
 
-    # 07: Top Attractors (bar)
-    fig, ax = plt.subplots(figsize=(10, 5))
+
+def plot_top_attractors(
+    data: pd.DataFrame,
+    ax,
+    **kwargs: Any,
+) -> None:
+    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
+    if agg.empty:
+        return
     top = agg.nlargest(20, "total_duration")
     labels = [f"A{idx}" for idx in top["attractor_idx"]]
     ax.bar(labels, top["total_duration"], color=COLORS["bar"], edgecolor="white")
     ax.set_ylabel("Total duration (ms)")
     ax.set_title("Top Attractors by Total Occupancy")
     ax.tick_params(axis="x", rotation=45)
-    fig.savefig(save_dir / "07_top_attractors.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-    # 08: Transition Heatmap
-    if "prev_attractor_idx" in data.columns:
-        df = data.dropna(subset=["prev_attractor_idx"]).copy()
-        if not df.empty:
-            df["prev_attractor_idx"] = df["prev_attractor_idx"].astype(int)
-            top_n = 30
-            top_attractors = data["attractor_idx"].value_counts().head(top_n).index.tolist()
-            df_top = df[
-                df["attractor_idx"].isin(top_attractors) &
-                df["prev_attractor_idx"].isin(top_attractors)
-            ]
-
-            if not df_top.empty:
-                fig, ax = plt.subplots(figsize=(8, 7))
-                trans_counts = pd.crosstab(
-                    df_top["prev_attractor_idx"],
-                    df_top["attractor_idx"],
-                    dropna=False,
-                )
-                row_sums = trans_counts.sum(axis=1)
-                trans_probs = trans_counts.div(row_sums, axis=0).fillna(0)
-                log_probs = np.log10(trans_probs.values + 1e-6)
-
-                im = ax.imshow(log_probs, cmap="magma", aspect="auto")
-                ax.set_xlabel("To")
-                ax.set_ylabel("From")
-                ax.set_title("Transition Matrix (Top Attractors)")
-                plt.colorbar(im, ax=ax, label="log10(prob + 1e-6)")
-                fig.savefig(save_dir / "08_transition_heatmap.png", dpi=150, bbox_inches="tight")
-                plt.close(fig)
 
 
-# =============================================================================
-# Time Evolution Plots
-# =============================================================================
-
-
-def plot_discovery_rate(time_df: pd.DataFrame, ax, **kwargs):
-    """Line plot: new attractor discovery rate over time."""
-    if time_df.empty or "unique_attractors_count" not in time_df.columns:
+def plot_transition_heatmap(
+    data: pd.DataFrame,
+    ax,
+    **kwargs: Any,
+) -> None:
+    if "prev_attractor_idx" not in data.columns:
         return
-
-    time_s = time_df["time_ms"].values / 1000.0
-    unique_counts = time_df["unique_attractors_count"].values
-
-    # Compute discovery rate (new attractors per second)
-    if len(time_s) > 1:
-        dt = np.diff(time_s)
-        new_attractors = np.diff(unique_counts)
-        rate = new_attractors / dt
-        time_centers = (time_s[:-1] + time_s[1:]) / 2
-
-        ax.plot(time_centers, rate, color=COLORS["primary"], linewidth=1.5)
-        ax.set_xlabel("Time (s)")
-        ax.set_ylabel("New attractors per second")
-        ax.set_title("Attractor Discovery Rate")
-        ax.set_xlim(0, time_s[-1])
-
-
-def plot_l2_norms(time_df: pd.DataFrame, ax, **kwargs):
-    """Line plot: transition matrix L2 norms over time."""
-    if time_df.empty or "transition_l2_norm" not in time_df.columns:
+    df = data.dropna(subset=["prev_attractor_idx"]).copy()
+    if df.empty:
         return
+    df["prev_attractor_idx"] = df["prev_attractor_idx"].astype(int)
+    top_n = 30
+    top_attractors = data["attractor_idx"].value_counts().head(top_n).index.tolist()
+    df_top = df[
+        df["attractor_idx"].isin(top_attractors) &
+        df["prev_attractor_idx"].isin(top_attractors)
+    ]
 
-    time_s = time_df["time_ms"].values / 1000.0
-    l2_norms = time_df["transition_l2_norm"].values
-
-    ax.plot(time_s, l2_norms, color=COLORS["secondary"], linewidth=1.5)
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("L2 norm")
-    ax.set_title("Transition Matrix L2 Norm Over Time")
-    ax.set_xlim(0, time_s[-1])
-
-
-def plot_unique_attractors(time_df: pd.DataFrame, ax, **kwargs):
-    """Line plot: cumulative unique attractors over time."""
-    if time_df.empty or "unique_attractors_count" not in time_df.columns:
+    if df_top.empty:
         return
+    trans_counts = pd.crosstab(
+        df_top["prev_attractor_idx"],
+        df_top["attractor_idx"],
+        dropna=False,
+    )
+    row_sums = trans_counts.sum(axis=1)
+    trans_probs = trans_counts.div(row_sums, axis=0).fillna(0)
+    log_probs = np.log10(trans_probs.values + 1e-6)
 
-    time_s = time_df["time_ms"].values / 1000.0
-    unique_counts = time_df["unique_attractors_count"].values
-
-    ax.plot(time_s, unique_counts, color=COLORS["tertiary"], linewidth=1.5)
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Unique attractors")
-    ax.set_title("Cumulative Unique Attractors")
-    ax.set_xlim(0, time_s[-1])
+    im = ax.imshow(log_probs, cmap="magma", aspect="auto")
+    ax.set_xlabel("To")
+    ax.set_ylabel("From")
+    ax.set_title("Transition Matrix (Top Attractors)")
+    plt.colorbar(im, ax=ax, label="log10(prob + 1e-6)")
 
 
-def generate_time_evolution_plots(time_df: pd.DataFrame, save_dir: Path) -> None:
-    """Generate time evolution plots from the time DataFrame."""
-    if time_df.empty:
-        return
+def create_aggregated_plotter() -> NamedMatplotlibPlotter:
+    """Create a plotter for aggregated attractor plots."""
+    return NamedMatplotlibPlotter(
+        plot_specs=[
+            ("03_lifespan_vs_occurrences", plot_lifespan_vs_occurrences, (8, 5)),
+            ("04_size_correlations", plot_size_correlations, None),
+            ("05_mean_lifespan_histogram", plot_mean_lifespan_histogram, (7, 5)),
+            ("06_mean_lifespan_by_size", plot_mean_lifespan_by_size, (7, 5)),
+            ("07_top_attractors", plot_top_attractors, (10, 5)),
+            ("08_transition_heatmap", plot_transition_heatmap, (8, 7)),
+        ],
+        apply_journal_style=True,
+    )
 
-    journal_style.apply_journal_style()
 
-    # Discovery rate
-    fig, ax = plt.subplots(figsize=(10, 3.5))
-    plot_discovery_rate(time_df, ax)
-    fig.savefig(save_dir / "10_discovery_rate.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
+class TimeEvolutionPlotter(BasePlotter):
+    """Plot time evolution data when provided via kwargs."""
 
-    # L2 norms
-    fig, ax = plt.subplots(figsize=(10, 3.5))
-    plot_l2_norms(time_df, ax)
-    fig.savefig(save_dir / "11_l2_norms.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    def __init__(self) -> None:
+        self._plotter = SeabornPlotter(
+            specs=[
+                PlotSpec(
+                    name="10_discovery_rate",
+                    plot_type="line",
+                    x="time_min",
+                    y="discovery_rate_per_s",
+                    title="Attractor Discovery Rate",
+                    xlabel="Time (min)",
+                    ylabel="New attractors per second",
+                    kwargs={"color": COLORS["primary"], "linewidth": 3, "alpha":.5},
+                ),
+                PlotSpec(
+                    name="11_transition_l2_norm",
+                    plot_type="line",
+                    x="time_min",
+                    y="transition_l2_norm",
+                    title="Transition Matrix L2 Norm Over Time",
+                    xlabel="Time (min)",
+                    ylabel="L2 norm",
+                    kwargs={"color": COLORS["secondary"], "linewidth": 3, "alpha":.5},
+                ),
+                PlotSpec(
+                    name="12_unique_attractors",
+                    plot_type="line",
+                    x="time_min",
+                    y="unique_attractors_count",
+                    title="Cumulative Unique Attractors",
+                    xlabel="Time (min)",
+                    ylabel="Unique attractors",
+                    kwargs={"color": COLORS["tertiary"], "linewidth": 3, "alpha":.5},
+                ),
+                PlotSpec(
+                    name="13_l2_norm_vs_discovery_rate",
+                    plot_type="scatter",
+                    x="discovery_rate_per_s",
+                    y="transition_l2_norm",
+                    title="Transition L2 Norm vs Discovery Rate",
+                    xlabel="Discovery rate (attractors/s)",
+                    ylabel="L2 norm",
+                    kwargs={"color": COLORS["accent"], "alpha": 0.6, "s": 20},
+                ),
+            ],
+            apply_journal_style=True,
+        )
 
-    # Unique attractors
-    fig, ax = plt.subplots(figsize=(10, 3.5))
-    plot_unique_attractors(time_df, ax)
-    fig.savefig(save_dir / "12_unique_attractors.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    def plot(
+        self,
+        data: pd.DataFrame,
+        metrics: dict[str, Any] | None = None,
+        save_dir: Path | None = None,
+        **kwargs: Any,
+    ) -> list[Any]:
+        time_df = kwargs.get("time_df")
+        if time_df is None or time_df.empty:
+            return []
+        # Convert time from ms to minutes
+        time_df = time_df.copy()
+        time_df["time_min"] = time_df["time_ms"] / 60000.0
+        return self._plotter.plot(time_df, metrics=metrics, save_dir=save_dir)
+
+
+def create_time_plotter() -> BasePlotter:
+    """Create a plotter for time-evolution plots."""
+    return TimeEvolutionPlotter()
 
 
 # =============================================================================
@@ -483,40 +550,61 @@ def generate_time_evolution_plots(time_df: pd.DataFrame, save_dir: Path) -> None
 # =============================================================================
 
 
-def create_plotter() -> SeabornPlotter:
-    """Create a plotter for occurrence-level plots (used by Pipeline)."""
-    return create_occurrence_plotter()
-
-
-def generate_all_plots(result: PipelineResult, save_dir: Path) -> None:
-    """Generate all plots from pipeline result.
-
-    This is called after pipeline.run() to generate:
-    - Aggregated plots (per-attractor summaries, transitions)
-    - Time evolution plots (discovery rate, L2 norms)
-
-    The occurrence-level plots are handled by the Pipeline's plotter.
-    """
-    plots_dir = save_dir / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
-
-    # Get the main DataFrame
-    df_key = "unified" if "unified" in result.dataframes else "aggregated"
-    if df_key in result.dataframes:
-        print(f"Generating aggregated plots from {df_key}...")
-        generate_aggregated_plots(result.dataframes[df_key], plots_dir)
-
-    # Get time evolution DataFrame
-    time_key = "unified_time" if "unified_time" in result.dataframes else "aggregated_time"
-    if time_key in result.dataframes:
-        print(f"Generating time evolution plots from {time_key}...")
-        generate_time_evolution_plots(result.dataframes[time_key], plots_dir)
+def create_plotter() -> BasePlotter:
+    """Create a combined plotter for all pipeline plots."""
+    return ComposablePlotter([
+        create_occurrence_plotter(),
+        create_aggregated_plotter(),
+        create_time_plotter(),
+    ])
 
 
 def load_seeds_from_file(seeds_file: Path) -> list[int]:
     """Load seeds from a text file (one seed per line)."""
     with open(seeds_file) as f:
         return [int(line.strip()) for line in f if line.strip()]
+
+
+def load_existing_data(save_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Load existing spike data files from save_dir/data.
+
+    Returns:
+        Tuple of (raw_outputs, metadata) where each raw_output contains
+        spikes_path and clusters_path.
+    """
+    data_dir = save_dir / "data"
+    if not data_dir.exists():
+        raise FileNotFoundError(f"Data directory not found: {data_dir}")
+
+    # Find all spike files (repeat_N_spikes.npz pattern)
+    spike_files = sorted(data_dir.glob("repeat_*_spikes.npz"))
+    if not spike_files:
+        # Try .npy format
+        spike_files = sorted(data_dir.glob("repeat_*_spikes.npy"))
+
+    if not spike_files:
+        raise FileNotFoundError(f"No spike files found in {data_dir}")
+
+    raw_outputs = []
+    metadata = []
+
+    for spike_file in spike_files:
+        # Extract repeat index from filename (repeat_0_spikes.npz -> 0)
+        name = spike_file.stem  # repeat_0_spikes
+        parts = name.split("_")
+        repeat_idx = int(parts[1])
+
+        raw_outputs.append({
+            "spikes_path": str(spike_file),
+            "clusters_path": None,  # clusters are embedded in npz
+        })
+        metadata.append({
+            "seed": None,  # Unknown from files
+            "repeat_idx": repeat_idx,
+        })
+
+    print(f"Found {len(raw_outputs)} existing data files in {data_dir}")
+    return raw_outputs, metadata
 
 
 def main() -> int:
@@ -529,10 +617,6 @@ def main() -> int:
     # Save command for reproducibility
     save_cmd(save_dir / "metadata")
 
-    # Ensure plots directory exists
-    plots_dir = save_dir / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
-
     # Load explicit seeds if provided
     seeds = None
     if args.seeds_file:
@@ -541,6 +625,11 @@ def main() -> int:
             seeds = load_seeds_from_file(seeds_file)
             print(f"Loaded {len(seeds)} seeds from {seeds_file}")
 
+    # Load config to extract n_excitatory_clusters
+    with open(config_path) as f:
+        sim_config = yaml.safe_load(f)
+    n_excitatory_clusters = sim_config.get("architecture", {}).get("clusters", {}).get("n_clusters")
+
     # Create pipeline components
     simulator_factory = create_simulator_factory(
         config_path,
@@ -548,7 +637,9 @@ def main() -> int:
         save_dir=save_dir,
     )
     processor_factory = create_processor_factory()
-    batch_processor_factory = SNNBatchProcessorFactory() if args.unified else None
+    batch_processor_factory = SNNBatchProcessorFactory(
+        clustering_params={"n_excitatory_clusters": n_excitatory_clusters},
+    )
     plotter = None if args.no_plots else create_plotter()
 
     # Create pipeline
@@ -570,35 +661,103 @@ def main() -> int:
         max_workers=args.max_workers,
         executor=args.executor,
         save_dir=save_dir,
-        save_raw=True,
+        save_raw=False,  # Don't accumulate raw outputs in memory
         save_processed=True,
         save_analysis=True,
         save_plots=not args.no_plots,
-        unified_processing=args.unified,
         log_level=args.log_level,
+        verbose_memory=args.verbose_memory,
+        time_evolution_dt=(
+            args.time_dt_ms / 1e3 if args.time_dt_ms is not None else None
+        ),
+        time_evolution_num_steps=args.time_steps,
     )
 
-    # Run pipeline
-    result = pipeline.run(config)
+    # Process-only mode: skip simulation, load existing data
+    if args.process_only:
+        from neuro_mod.pipeline.config import PipelineResult
+        from neuro_mod.pipeline.io import get_git_commit, get_timestamp
+        import time as time_module
 
-    # Generate aggregated and time evolution plots
-    if not args.no_plots:
-        generate_all_plots(result, save_dir)
+        print("Process-only mode: loading existing data files...")
+        raw_outputs, metadata = load_existing_data(save_dir)
+
+        # Initialize result
+        result = PipelineResult(
+            mode=config.mode,
+            config=config,
+            timestamp=get_timestamp(),
+            git_commit=get_git_commit(),
+        )
+        result.seeds_used = [m.get("seed") for m in metadata]
+
+        start_time = time_module.time()
+
+        # Run unified processing
+        print(f"Running unified processing on {len(raw_outputs)} files...")
+        batch_processor = batch_processor_factory(raw_outputs, metadata)
+        processed = batch_processor.process_batch(raw_outputs, metadata)
+
+        if config.save_processed:
+            batch_processor.save(save_dir / "processed" / "unified")
+
+        # Analysis
+        analyzer = SNNAnalyzer(processed, config=batch_processor.get_config())
+        df = analyzer.to_dataframe()
+        result.dataframes["unified"] = df
+        result.dataframes["aggregated"] = df
+        result.metrics["unified"] = analyzer.get_summary_metrics()
+        result.metrics["aggregated"] = result.metrics["unified"]
+
+        per_attr_df = analyzer.get_per_attractor_dataframe()
+        if not per_attr_df.empty:
+            result.dataframes["unified_per_attractor"] = per_attr_df
+            result.dataframes["aggregated_per_attractor"] = per_attr_df
+
+        time_df = analyzer.get_time_evolution_dataframe(
+            dt=config.time_evolution_dt,
+            num_steps=config.time_evolution_num_steps,
+        )
+        if not time_df.empty:
+            result.dataframes["unified_time"] = time_df
+            result.dataframes["aggregated_time"] = time_df
+
+        result.duration_seconds = time_module.time() - start_time
+
+        # Generate plots
+        if plotter and not args.no_plots:
+            print("Generating plots...")
+            plots_dir = save_dir / "plots"
+            time_df = result.dataframes.get("aggregated_time")
+            per_attr_df = result.dataframes.get("aggregated_per_attractor")
+            figures = plotter.plot(
+                data=result.dataframes["aggregated"],
+                metrics=result.metrics.get("aggregated"),
+                save_dir=plots_dir,
+                time_df=time_df,
+                per_attractor_df=per_attr_df,
+            )
+            result.figures.extend(figures)
+
+    else:
+        # Run full pipeline (simulation + processing)
+        result = pipeline.run(config)
 
     # Merge raster plots into a single PDF
-    if args.raster_plots:
-        raster_dir = plots_dir / "rasters"
-        if raster_dir.is_dir():
-            try:
-                folder_plots_to_pdf(
-                    raster_dir,
-                    output_path=plots_dir / "rasters.pdf",
-                )
-            except ValueError as exc:
-                print(f"Skipping raster PDF export: {exc}")
+    # if args.raster_plots:
+    #     raster_dir = save_dir / "plots" / "rasters"
+    #     if raster_dir.is_dir() and any(raster_dir.glob("*.png")):
+    #         try:
+    #             folder_plots_to_pdf(
+    #                 raster_dir,
+    #                 output_path=save_dir / "plots" / "rasters.pdf",
+    #             )
+    #         except ValueError as exc:
+    #             print(f"Skipping raster PDF export: {exc}")
 
     # Merge all plots into a single PDF
-    if not args.no_plots and plots_dir.is_dir():
+    plots_dir = save_dir / "plots"
+    if not args.no_plots and plots_dir.is_dir() and any(plots_dir.glob("*.png")):
         try:
             folder_plots_to_pdf(
                 plots_dir,
