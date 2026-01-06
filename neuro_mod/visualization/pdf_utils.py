@@ -60,7 +60,6 @@ def folder_plots_to_pdf(
             fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
             ax.imshow(image)
             ax.axis("off")
-            fig.tight_layout(pad=0)
             pdf.savefig(fig, bbox_inches="tight", pad_inches=0)
             plt.close(fig)
 

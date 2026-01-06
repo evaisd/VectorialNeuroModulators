@@ -293,6 +293,10 @@ class SeabornPlotter(BasePlotter):
             plot_kwargs.pop("hue", None)
             plot_kwargs.pop("style", None)
             plot_kwargs.pop("size", None)
+        elif spec.plot_type == "line":
+            import matplotlib as mpl
+            plot_kwargs.setdefault("alpha", self.default_alpha)
+            plot_kwargs.setdefault("linewidth", mpl.rcParams["lines.linewidth"] * 3)
 
         plot_func(**plot_kwargs)
 
@@ -331,6 +335,11 @@ class SeabornPlotter(BasePlotter):
                 map_kwargs[param] = value
 
         map_kwargs.update(spec.kwargs)
+
+        if spec.plot_type == "line":
+            import matplotlib as mpl
+            map_kwargs.setdefault("alpha", self.default_alpha)
+            map_kwargs.setdefault("linewidth", mpl.rcParams["lines.linewidth"] * 3)
 
         g.map_dataframe(plot_func, **map_kwargs)
         g.add_legend()
