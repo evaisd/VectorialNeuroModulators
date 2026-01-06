@@ -428,24 +428,28 @@ def plot_transition_heatmap(
     ax,
     **kwargs: Any,
 ) -> None:
+    tpm_df = kwargs.get("tpm_df")
+    if tpm_df is not None and not tpm_df.empty:
+        # Use the full transition matrix from the analyzer
+        tpm = tpm_df.values
+        log_probs = np.log10(tpm + 1e-6)
+        im = ax.imshow(log_probs, cmap="magma", aspect="auto")
+        ax.set_xlabel("To (attractor idx)")
+        ax.set_ylabel("From (attractor idx)")
+        ax.set_title("Transition Probability Matrix")
+        plt.colorbar(im, ax=ax, label="log10(prob + 1e-6)")
+        return
+
+    # Fallback: compute from occurrence data
     if "prev_attractor_idx" not in data.columns:
         return
     df = data.dropna(subset=["prev_attractor_idx"]).copy()
     if df.empty:
         return
     df["prev_attractor_idx"] = df["prev_attractor_idx"].astype(int)
-    top_n = 30
-    top_attractors = data["attractor_idx"].value_counts().head(top_n).index.tolist()
-    df_top = df[
-        df["attractor_idx"].isin(top_attractors) &
-        df["prev_attractor_idx"].isin(top_attractors)
-    ]
-
-    if df_top.empty:
-        return
     trans_counts = pd.crosstab(
-        df_top["prev_attractor_idx"],
-        df_top["attractor_idx"],
+        df["prev_attractor_idx"],
+        df["attractor_idx"],
         dropna=False,
     )
     row_sums = trans_counts.sum(axis=1)
@@ -453,10 +457,35 @@ def plot_transition_heatmap(
     log_probs = np.log10(trans_probs.values + 1e-6)
 
     im = ax.imshow(log_probs, cmap="magma", aspect="auto")
-    ax.set_xlabel("To")
-    ax.set_ylabel("From")
-    ax.set_title("Transition Matrix (Top Attractors)")
+    ax.set_xlabel("To (attractor idx)")
+    ax.set_ylabel("From (attractor idx)")
+    ax.set_title("Transition Probability Matrix")
     plt.colorbar(im, ax=ax, label="log10(prob + 1e-6)")
+
+
+def plot_discovery_by_num_of_clusters(
+    data: pd.DataFrame,
+    ax,
+    **kwargs: Any,
+) -> None:
+    from math import comb
+    lw = 5
+    alpha = 0.5
+    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
+    for k, g in sorted(agg.groupby("num_clusters")):
+        if k == 0:
+            continue  # skip baseline if desired
+
+        x = g.first_start / agg.last_end.max()
+        y = (np.arange(len(g)) + 1) / comb(18, k)
+
+        ax.plot(x, y, label=str(k), linewidth=lw, alpha=alpha)
+
+    ax.axline((0, 1), (1, 1), linestyle=":", color="k", linewidth=2, alpha=0.5)
+    ax.set_xlabel("time / total sim duration")
+    ax.set_ylabel("# attractors discovered as share of total")
+    ax.legend(title="# clusters")
+    ax.set_title("Discovery by number of attractors")
 
 
 def create_aggregated_plotter() -> NamedMatplotlibPlotter:
@@ -469,6 +498,7 @@ def create_aggregated_plotter() -> NamedMatplotlibPlotter:
             ("06_mean_lifespan_by_size", plot_mean_lifespan_by_size, (7, 5)),
             ("07_top_attractors", plot_top_attractors, (10, 5)),
             ("08_transition_heatmap", plot_transition_heatmap, (8, 7)),
+            ("09_discovery_by_num_clusters", plot_discovery_by_num_of_clusters, (8, 5))
         ],
         apply_journal_style=True,
     )
@@ -675,70 +705,9 @@ def main() -> int:
 
     # Process-only mode: skip simulation, load existing data
     if args.process_only:
-        from neuro_mod.pipeline.config import PipelineResult
-        from neuro_mod.pipeline.io import get_git_commit, get_timestamp
-        import time as time_module
-
         print("Process-only mode: loading existing data files...")
         raw_outputs, metadata = load_existing_data(save_dir)
-
-        # Initialize result
-        result = PipelineResult(
-            mode=config.mode,
-            config=config,
-            timestamp=get_timestamp(),
-            git_commit=get_git_commit(),
-        )
-        result.seeds_used = [m.get("seed") for m in metadata]
-
-        start_time = time_module.time()
-
-        # Run unified processing
-        print(f"Running unified processing on {len(raw_outputs)} files...")
-        batch_processor = batch_processor_factory(raw_outputs, metadata)
-        processed = batch_processor.process_batch(raw_outputs, metadata)
-
-        if config.save_processed:
-            batch_processor.save(save_dir / "processed" / "unified")
-
-        # Analysis
-        analyzer = SNNAnalyzer(processed, config=batch_processor.get_config())
-        df = analyzer.to_dataframe()
-        result.dataframes["unified"] = df
-        result.dataframes["aggregated"] = df
-        result.metrics["unified"] = analyzer.get_summary_metrics()
-        result.metrics["aggregated"] = result.metrics["unified"]
-
-        per_attr_df = analyzer.get_per_attractor_dataframe()
-        if not per_attr_df.empty:
-            result.dataframes["unified_per_attractor"] = per_attr_df
-            result.dataframes["aggregated_per_attractor"] = per_attr_df
-
-        time_df = analyzer.get_time_evolution_dataframe(
-            dt=config.time_evolution_dt,
-            num_steps=config.time_evolution_num_steps,
-        )
-        if not time_df.empty:
-            result.dataframes["unified_time"] = time_df
-            result.dataframes["aggregated_time"] = time_df
-
-        result.duration_seconds = time_module.time() - start_time
-
-        # Generate plots
-        if plotter and not args.no_plots:
-            print("Generating plots...")
-            plots_dir = save_dir / "plots"
-            time_df = result.dataframes.get("aggregated_time")
-            per_attr_df = result.dataframes.get("aggregated_per_attractor")
-            figures = plotter.plot(
-                data=result.dataframes["aggregated"],
-                metrics=result.metrics.get("aggregated"),
-                save_dir=plots_dir,
-                time_df=time_df,
-                per_attractor_df=per_attr_df,
-            )
-            result.figures.extend(figures)
-
+        result = pipeline.process_existing(config, raw_outputs, metadata)
     else:
         # Run full pipeline (simulation + processing)
         result = pipeline.run(config)

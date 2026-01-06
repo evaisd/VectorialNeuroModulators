@@ -1,6 +1,7 @@
 """Stager for spiking network simulations."""
 
 from pathlib import Path
+from numbers import Real
 import numpy as np
 import torch
 
@@ -38,19 +39,7 @@ class StageSNNSimulation(_Stager):
         self.current_generator = self._get_currents_generator()
 
     def _get_lif_net(self) -> LIFNet:
-        net_params = dict(self.network_params)
-        for name, param in net_params.items():
-            if isinstance(param, float):
-                net_params[name] = param
-            elif len(param) == self.n_neurons:
-                net_params[name] = np.array(param)
-            elif len(param) == 2:
-                _new = torch.tensor([param[0]] * self.n_excitatory + [param[1]] * self.n_inhibitory, dtype=torch.float64)
-                net_params[name] = _new
-            elif len(param) == 4:
-                pass
-            else:
-                raise ValueError(f"Invalid {name} provided. Has to be either length 1 or 2")
+        net_params = self._normalize_net_params(dict(self.network_params))
         params = {
             "synaptic_weights": torch.from_numpy(self.weights),
             "delta_t": self.delta_t,
@@ -58,6 +47,38 @@ class StageSNNSimulation(_Stager):
             **net_params
         }
         return LIFNet(**params)
+
+    def _normalize_net_params(self, net_params: dict) -> dict:
+        normalized = {}
+        for name, param in net_params.items():
+            if isinstance(param, Real):
+                normalized[name] = float(param)
+                continue
+            try:
+                length = len(param)
+            except TypeError:
+                normalized[name] = param
+                continue
+            if length == self.n_neurons:
+                normalized[name] = np.array(param)
+            elif length == 2:
+                normalized[name] = torch.tensor(
+                    [param[0]] * self.n_excitatory + [param[1]] * self.n_inhibitory,
+                    dtype=torch.float64,
+                )
+            elif length == 4:
+                normalized[name] = param
+            else:
+                raise ValueError(f"Invalid {name} provided. Has to be either length 1 or 2")
+        return normalized
+
+    def _expand_cluster_vector(self, vec: np.ndarray) -> np.ndarray:
+        out = np.zeros(self.n_neurons, dtype=float)
+        for i, value in enumerate(vec):
+            left = self.cluster_vec[i]
+            right = self.cluster_vec[i + 1]
+            out[left:right] = value
+        return out
 
     def _get_lif_net_with_perturbations(self, perturbations: dict) -> LIFNet:
         """Build a LIF network with cluster-space perturbations applied.
@@ -74,14 +95,6 @@ class StageSNNSimulation(_Stager):
             "n_excitatory": self.clusters_params["n_clusters"] + 1,
         }
 
-        def _expand_cluster_vector(vec):
-            out = np.zeros(self.n_neurons, dtype=float)
-            for i, value in enumerate(vec):
-                left = self.cluster_vec[i]
-                right = self.cluster_vec[i + 1]
-                out[left:right] = value
-            return out
-
         def _to_cluster_vector(value):
             arr = np.asarray(value, dtype=float)
             if arr.ndim == 0:
@@ -89,39 +102,14 @@ class StageSNNSimulation(_Stager):
             return self._project_to_cluster_space(value, **arr_params)
 
         net_params = dict(self.network_params)
-        if "j_ext" in perturbations:
-            base = _to_cluster_vector(net_params["j_ext"])
-            base = base + self._coerce_cluster_vector(perturbations["j_ext"], n_pops)
-            net_params["j_ext"] = _expand_cluster_vector(base)
-        if "threshold" in perturbations:
-            base = _to_cluster_vector(net_params["threshold"])
-            base = base + self._coerce_cluster_vector(perturbations["threshold"], n_pops)
-            net_params["threshold"] = _expand_cluster_vector(base)
-        if "tau_membrane" in perturbations:
-            base = _to_cluster_vector(net_params["tau_membrane"])
-            base = base + self._coerce_cluster_vector(perturbations["tau_membrane"], n_pops)
-            net_params["tau_membrane"] = _expand_cluster_vector(base)
-        if "tau_synaptic" in perturbations:
-            base = _to_cluster_vector(net_params["tau_synaptic"])
-            base = base + self._coerce_cluster_vector(perturbations["tau_synaptic"], n_pops)
-            net_params["tau_synaptic"] = _expand_cluster_vector(base)
-        if "tau_refractory" in perturbations:
-            base = _to_cluster_vector(net_params["tau_refractory"])
-            base = base + self._coerce_cluster_vector(perturbations["tau_refractory"], n_pops)
-            net_params["tau_refractory"] = _expand_cluster_vector(base)
+        for key in ("j_ext", "threshold", "tau_membrane", "tau_synaptic", "tau_refractory"):
+            if key not in perturbations:
+                continue
+            base = _to_cluster_vector(net_params[key])
+            base = base + self._coerce_cluster_vector(perturbations[key], n_pops)
+            net_params[key] = self._expand_cluster_vector(base)
 
-        for name, param in net_params.items():
-            if isinstance(param, float):
-                net_params[name] = param
-            elif len(param) == self.n_neurons:
-                net_params[name] = np.array(param)
-            elif len(param) == 2:
-                _new = torch.tensor([param[0]] * self.n_excitatory + [param[1]] * self.n_inhibitory, dtype=torch.float64)
-                net_params[name] = _new
-            elif len(param) == 4:
-                pass
-            else:
-                raise ValueError(f"Invalid {name} provided. Has to be either length 1 or 2")
+        net_params = self._normalize_net_params(net_params)
 
         params = {
             "synaptic_weights": torch.from_numpy(self.weights),

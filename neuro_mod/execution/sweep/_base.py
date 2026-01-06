@@ -67,6 +67,42 @@ class _BaseSweepRunner(ABC):
         else:
             d[last] = param_val
 
+    def _run_sweep_step(
+            self,
+            param_list: list[str],
+            sweep_param,
+            param_idx: int | None,
+            idx: int,
+            total_steps: int,
+            *,
+            step_kwargs: dict,
+            save_outputs: list[str] | None = None,
+    ):
+        if save_outputs is not None:
+            self._save_outputs = save_outputs
+        perturbation = "perturbation" in self._baseline_params.keys()
+        if perturbation and self.perturbator is None:
+            self._init_perturbator()
+        self._modify_params(self._baseline_params, param_list, sweep_param, param_idx)
+        init_kwargs = {}
+        if perturbation:
+            perturbations = self._get_perturbation()
+            init_kwargs = {
+                f"{name}_perturbation": value
+                for name, value in perturbations.items()
+            }
+            self._log_perturbation_summary(perturbations)
+            self._save_perturbations(perturbations, idx)
+        self._sweep_object = self._stager.from_dict(self._baseline_params, **init_kwargs)
+        if hasattr(self._sweep_object, "logger"):
+            self._sweep_object.logger = self.logger
+        self.logger.info(f"Running sweep step {idx + 1}/{total_steps} for {' '.join(param_list)}.")
+        result = self._step(param_list, idx, sweep_param, **step_kwargs)
+        config_path = self._dirs['configs'].joinpath(f"{idx}.yaml")
+        with open(config_path, 'w') as f:
+            yaml.dump(self._baseline_params, f, sort_keys=False)
+        return result
+
 
     def execute(
                 self,
@@ -82,7 +118,6 @@ class _BaseSweepRunner(ABC):
                 **kwargs):
         self.set_dirs(main_dir)
         self._read_baseline_params(baseline_params)
-        perturbation = "perturbation" in self._baseline_params.keys()
         param = param if isinstance(param, list) else [param]
         results = []
         total_steps = len(sweep_params)
@@ -104,27 +139,17 @@ class _BaseSweepRunner(ABC):
                 step_kwargs=kwargs,
             )
         else:
-            if perturbation:
-                self._init_perturbator()
             for i, sweep_param in enumerate(sweep_params):
-                self._modify_params(self._baseline_params, param, sweep_param, param_idx)
-                init_kwargs = {}
-                if perturbation:
-                    perturbations = self._get_perturbation()
-                    init_kwargs = {
-                        f"{name}_perturbation": value
-                        for name, value in perturbations.items()
-                    }
-                    self._log_perturbation_summary(perturbations)
-                    self._save_perturbations(perturbations, i)
-                self._sweep_object = self._stager.from_dict(self._baseline_params, **init_kwargs)
-                if hasattr(self._sweep_object, "logger"):
-                    self._sweep_object.logger = self.logger
-                self.logger.info(f"Running sweep step {i + 1}/{total_steps} for {' '.join(param)}.")
-                results.append(self._step(param, i, sweep_param, **kwargs))
-                config_path = self._dirs['configs'].joinpath(f"{i}.yaml")
-                with open(config_path, 'w') as f:
-                    yaml.dump(self._baseline_params, f, sort_keys=False)
+                results.append(
+                    self._run_sweep_step(
+                        param,
+                        sweep_param,
+                        param_idx,
+                        i,
+                        total_steps,
+                        step_kwargs=kwargs,
+                    )
+                )
         self.summary(results, sweep_params)
         self.logger.info("Sweep complete.")
 

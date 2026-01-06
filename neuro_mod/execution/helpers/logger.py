@@ -104,3 +104,8 @@ class Logger:
     def __exit__(self, exc_type, exc, exc_tb) -> None:
         """Exit a logging context manager and close resources."""
         self.close()
+
+
+def build_logger_from_settings(settings: dict) -> Logger:
+    """Create a Logger instance from serialized settings."""
+    return Logger(**settings)

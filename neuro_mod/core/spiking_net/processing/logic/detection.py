@@ -7,27 +7,46 @@ def get_activity(
         firing_rates: np.ndarray,
         baseline_rate: float | np.ndarray = None,
         flag: bool = False,
+        *,
+        max_iters: int = 50,
+        tol: float = 20.0,
 ):
     """Determine active clusters based on firing rates.
 
     Args:
         firing_rates: Array of firing rates per cluster over time.
         baseline_rate: Optional baseline rate for comparison.
-        flag: Internal recursion flag.
+        flag: If True, return after the first pass (compatibility).
+        max_iters: Maximum refinement iterations before returning.
+        tol: Convergence threshold for baseline updates.
 
     Returns:
         Boolean activity matrix of the same shape as `firing_rates`.
     """
-    if isinstance(baseline_rate, float):
-        baseline_rate = np.full(firing_rates.shape[0], baseline_rate)
-    baseline_rate = firing_rates.mean(axis=1) if baseline_rate is None else baseline_rate
-    active_matrix = firing_rates > baseline_rate[:, None]
+    if baseline_rate is None:
+        baseline_vec = firing_rates.mean(axis=1)
+    else:
+        baseline_arr = np.asarray(baseline_rate, dtype=float)
+        if baseline_arr.ndim == 0:
+            baseline_vec = np.full(firing_rates.shape[0], float(baseline_arr))
+        else:
+            baseline_vec = baseline_arr
+
+    active_matrix = firing_rates > baseline_vec[:, None]
     if flag:
         return active_matrix
-    updated_baseline = firing_rates[active_matrix].mean()
-    if abs(updated_baseline - baseline_rate.mean()) < 20.:
-        return get_activity(firing_rates, updated_baseline, True)
-    return get_activity(firing_rates, updated_baseline, flag)
+    for _ in range(max_iters):
+        if not np.any(active_matrix):
+            return active_matrix
+        updated_baseline = firing_rates[active_matrix].mean()
+        if not np.isfinite(updated_baseline):
+            return active_matrix
+        if abs(updated_baseline - baseline_vec.mean()) < tol:
+            return active_matrix
+        baseline_vec = np.full(firing_rates.shape[0], float(updated_baseline))
+        active_matrix = firing_rates > baseline_vec[:, None]
+
+    return active_matrix
 
 
 def smooth_cluster_activity(

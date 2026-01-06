@@ -46,21 +46,16 @@ class _BaseMeanFieldStager(_Stager, ABC):
                 return np.repeat(arr, nu_ext.shape[0])
             return self._project_to_cluster_space(value, **arr_params)
 
-        threshold = _to_cluster_vector(self.network_params['threshold'])
-        if "threshold" in perturbations:
-            threshold = threshold + self._coerce_cluster_vector(perturbations["threshold"], threshold.shape[0])
+        def _apply_param(name: str) -> np.ndarray:
+            value = _to_cluster_vector(self.network_params[name])
+            if name in perturbations:
+                value = value + self._coerce_cluster_vector(perturbations[name], value.shape[0])
+            return value
 
-        tau_membrane = _to_cluster_vector(self.network_params['tau_membrane'])
-        if "tau_membrane" in perturbations:
-            tau_membrane = tau_membrane + self._coerce_cluster_vector(perturbations["tau_membrane"], tau_membrane.shape[0])
-
-        tau_synaptic = _to_cluster_vector(self.network_params['tau_synaptic'])
-        if "tau_synaptic" in perturbations:
-            tau_synaptic = tau_synaptic + self._coerce_cluster_vector(perturbations["tau_synaptic"], tau_synaptic.shape[0])
-
-        tau_refractory = _to_cluster_vector(self.network_params['tau_refractory'])
-        if "tau_refractory" in perturbations:
-            tau_refractory = tau_refractory + self._coerce_cluster_vector(perturbations["tau_refractory"], tau_refractory.shape[0])
+        threshold = _apply_param("threshold")
+        tau_membrane = _apply_param("tau_membrane")
+        tau_synaptic = _apply_param("tau_synaptic")
+        tau_refractory = _apply_param("tau_refractory")
         params = {
             "n_clusters": self.clusters_params['n_clusters'],
             'c_matrix': self.c_mat,

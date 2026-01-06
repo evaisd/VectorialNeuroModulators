@@ -131,6 +131,48 @@ class Pipeline(Generic[TRaw, TProcessed]):
 
         return result
 
+    def process_existing(
+        self,
+        config: PipelineConfig,
+        raw_refs: list[TRaw],
+        metadata: list[dict[str, Any]],
+        *,
+        key: str = "aggregated",
+        sweep_value: Any = None,
+    ) -> PipelineResult:
+        """Process existing raw outputs without running simulations."""
+        start_time = time.time()
+        self._setup_logging(config)
+        self.logger.info(f"Processing existing data for '{key}'")
+
+        result = PipelineResult(
+            mode=config.mode,
+            config=config,
+            timestamp=get_timestamp(),
+            git_commit=get_git_commit(),
+        )
+        result.seeds_used = [m.get("seed") for m in metadata]
+
+        self._process_and_analyze_unified(
+            config,
+            result,
+            raw_refs,
+            metadata,
+            key=key,
+            sweep_value=sweep_value,
+        )
+
+        if config.run_plotting:
+            self._generate_plots(config, result, key)
+
+        result.duration_seconds = time.time() - start_time
+        self.logger.info(f"Processing complete in {result.duration_seconds:.2f}s")
+
+        if config.save_dir:
+            self._save_results(config, result)
+
+        return result
+
     def _log_memory_usage(self, config: PipelineConfig, context: str = "") -> None:
         """Log current memory usage if verbose_memory is enabled."""
         if not config.verbose_memory:
@@ -152,15 +194,14 @@ class Pipeline(Generic[TRaw, TProcessed]):
                 max_rss_mb = usage.ru_maxrss / (1024 * 1024)
             self.logger.info(f"[Memory] {context}: MaxRSS={max_rss_mb:.1f}MB")
 
-    def _get_analysis_dir(self, config: PipelineConfig, key: str) -> Path:
-        """Get the analysis directory for a given key."""
-        return config.save_dir / "analysis" / key
+    def _get_analysis_dir(self, config: PipelineConfig) -> Path:
+        """Get the analysis directory."""
+        return config.save_dir / "analysis"
 
     def _save_dataframe(
         self,
         df: pd.DataFrame,
         config: PipelineConfig,
-        key: str,
         name: str = "dataframe",
     ) -> Path:
         """Save a DataFrame to disk.
@@ -168,13 +209,12 @@ class Pipeline(Generic[TRaw, TProcessed]):
         Args:
             df: DataFrame to save.
             config: Pipeline configuration.
-            key: Run key (e.g., "unified", "sweep_0").
             name: Base name for the file.
 
         Returns:
             Path to the saved file.
         """
-        analysis_dir = self._get_analysis_dir(config, key)
+        analysis_dir = self._get_analysis_dir(config)
         analysis_dir.mkdir(parents=True, exist_ok=True)
         path = analysis_dir / f"{name}.pkl"
         df.to_pickle(path)
@@ -186,16 +226,36 @@ class Pipeline(Generic[TRaw, TProcessed]):
         self,
         metrics: dict[str, Any],
         config: PipelineConfig,
-        key: str,
     ) -> Path:
         """Save metrics to disk."""
         import json
-        analysis_dir = self._get_analysis_dir(config, key)
+        analysis_dir = self._get_analysis_dir(config)
         analysis_dir.mkdir(parents=True, exist_ok=True)
         path = analysis_dir / "metrics.json"
         with open(path, "w") as f:
             json.dump(metrics, f, indent=2, default=str)
         return path
+
+    def _save_analysis_artifacts(
+        self,
+        config: PipelineConfig,
+        result: PipelineResult,
+        key: str,
+    ) -> None:
+        """Persist analysis outputs for a run key."""
+        if not (config.save_analysis and config.save_dir):
+            return
+        self._save_dataframe(result.dataframes[key], config, "dataframe")
+        self._save_metrics(result.metrics[key], config)
+        per_attr_key = f"{key}_per_attractor"
+        time_key = f"{key}_time"
+        if per_attr_key in result.dataframes:
+            self._save_dataframe(result.dataframes[per_attr_key], config, "per_attractor")
+        if time_key in result.dataframes:
+            self._save_dataframe(result.dataframes[time_key], config, "time_evolution")
+        tpm_key = f"{key}_tpm"
+        if tpm_key in result.dataframes:
+            self._save_dataframe(result.dataframes[tpm_key], config, "tpm")
 
     def _setup_logging(self, config: PipelineConfig) -> None:
         """Configure logging based on config."""
@@ -312,19 +372,9 @@ class Pipeline(Generic[TRaw, TProcessed]):
         self.logger.info("Starting unified batch processing (loading from disk)")
         self._log_memory_usage(config, "Before unified processing")
         self._process_and_analyze_unified(
-            config, result, raw_refs, metadata, key="unified"
+            config, result, raw_refs, metadata, key="aggregated"
         )
         self._log_memory_usage(config, "After unified processing")
-
-        # Store unified results as aggregated
-        if "unified" in result.dataframes:
-            result.dataframes["aggregated"] = result.dataframes["unified"]
-        if "unified_per_attractor" in result.dataframes:
-            result.dataframes["aggregated_per_attractor"] = result.dataframes["unified_per_attractor"]
-        if "unified_time" in result.dataframes:
-            result.dataframes["aggregated_time"] = result.dataframes["unified_time"]
-        if "unified" in result.metrics:
-            result.metrics["aggregated"] = result.metrics["unified"]
 
         if config.run_plotting:
             self._generate_plots(config, result, "aggregated")
@@ -605,24 +655,43 @@ class Pipeline(Generic[TRaw, TProcessed]):
             result.processed_data[key] = processed
 
             if config.save_processed and config.save_dir:
-                processor.save(config.save_dir / "processed" / key)
+                processor.save(config.save_dir / "processed")
         else:
             result.processed_data[key] = processed
 
-        # Analysis phase
-        if config.run_analysis and self.analyzer_factory is not None:
-            self.logger.debug(f"Analyzing {key}")
-            analyzer = self._build_analyzer(processed, processor)
-            df = analyzer.to_dataframe()
-            metrics = analyzer.get_summary_metrics()
+        self._analyze_and_store(config, result, processed, processor, key)
 
-            result.dataframes[key] = df
-            result.metrics[key] = metrics
+    def _analyze_and_store(
+        self,
+        config: PipelineConfig,
+        result: PipelineResult,
+        processed: Any,
+        processor: Any | None,
+        key: str,
+        *,
+        sweep_value: Any = None,
+    ) -> None:
+        """Run analysis and persist outputs."""
+        if not (config.run_analysis and self.analyzer_factory is not None):
+            return
+        if processed is None:
+            return
 
-            if hasattr(analyzer, "get_per_attractor_dataframe"):
-                per_attr_df = analyzer.get_per_attractor_dataframe()
-                if not per_attr_df.empty:
-                    result.dataframes[f"{key}_per_attractor"] = per_attr_df
+        self.logger.debug(f"Analyzing {key}")
+        analyzer = self._build_analyzer(processed, processor)
+        df = analyzer.to_dataframe()
+        metrics = analyzer.get_summary_metrics()
+
+        if sweep_value is not None and "sweep_value" not in df.columns:
+            df["sweep_value"] = sweep_value
+
+        result.dataframes[key] = df
+        result.metrics[key] = metrics
+
+        if hasattr(analyzer, "get_per_attractor_dataframe"):
+            per_attr_df = analyzer.get_per_attractor_dataframe()
+            if not per_attr_df.empty:
+                result.dataframes[f"{key}_per_attractor"] = per_attr_df
 
             if hasattr(analyzer, "get_time_evolution_dataframe"):
                 time_df = analyzer.get_time_evolution_dataframe(
@@ -632,18 +701,12 @@ class Pipeline(Generic[TRaw, TProcessed]):
                 if not time_df.empty:
                     result.dataframes[f"{key}_time"] = time_df
 
-            # Save to disk if configured
-            if config.save_analysis and config.save_dir:
-                self._save_dataframe(df, config, key)
-                self._save_metrics(metrics, config, key)
-                if f"{key}_per_attractor" in result.dataframes:
-                    self._save_dataframe(
-                        result.dataframes[f"{key}_per_attractor"], config, key, "per_attractor"
-                    )
-                if f"{key}_time" in result.dataframes:
-                    self._save_dataframe(
-                        result.dataframes[f"{key}_time"], config, key, "time_evolution"
-                    )
+        if hasattr(analyzer, "get_transition_matrix"):
+            tpm = pd.DataFrame(analyzer.get_transition_matrix())
+            if not tpm.empty:
+                result.dataframes[f"{key}_tpm"] = tpm
+
+        self._save_analysis_artifacts(config, result, key)
 
     def _supports_batch_processing(self) -> bool:
         """Check if the pipeline supports batch processing.
@@ -700,48 +763,17 @@ class Pipeline(Generic[TRaw, TProcessed]):
             result.processed_data[key] = processed
 
             if config.save_processed and config.save_dir:
-                batch_processor.save(config.save_dir / "processed" / key)
+                batch_processor.save(config.save_dir / "processed")
 
         # Analysis phase
-        if config.run_analysis and self.analyzer_factory is not None and processed is not None:
-            self.logger.debug(f"Analyzing unified data for '{key}'")
-            analyzer = self._build_analyzer(processed, batch_processor)
-            df = analyzer.to_dataframe()
-            metrics = analyzer.get_summary_metrics()
-
-            # Ensure metadata columns are present
-            if sweep_value is not None and "sweep_value" not in df.columns:
-                df["sweep_value"] = sweep_value
-
-            # Store in result (unified results are the aggregated results)
-            result.dataframes[key] = df
-            result.metrics[key] = metrics
-
-            if hasattr(analyzer, "get_per_attractor_dataframe"):
-                per_attr_df = analyzer.get_per_attractor_dataframe()
-                if not per_attr_df.empty:
-                    result.dataframes[f"{key}_per_attractor"] = per_attr_df
-
-            if hasattr(analyzer, "get_time_evolution_dataframe"):
-                time_df = analyzer.get_time_evolution_dataframe(
-                    dt=config.time_evolution_dt,
-                    num_steps=config.time_evolution_num_steps,
-                )
-                if not time_df.empty:
-                    result.dataframes[f"{key}_time"] = time_df
-
-            # Save to disk
-            if config.save_analysis and config.save_dir:
-                self._save_dataframe(df, config, key)
-                self._save_metrics(metrics, config, key)
-                if f"{key}_per_attractor" in result.dataframes:
-                    self._save_dataframe(
-                        result.dataframes[f"{key}_per_attractor"], config, key, "per_attractor"
-                    )
-                if f"{key}_time" in result.dataframes:
-                    self._save_dataframe(
-                        result.dataframes[f"{key}_time"], config, key, "time_evolution"
-                    )
+        self._analyze_and_store(
+            config,
+            result,
+            processed,
+            batch_processor,
+            key,
+            sweep_value=sweep_value,
+        )
 
     def _build_analyzer(self, processed: Any, processor: Any | None = None) -> Any:
         """Create analyzer, attaching processor config if supported."""
@@ -895,13 +927,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
 
         time_df = result.dataframes.get(f"{key}_time")
         per_attr_df = result.dataframes.get(f"{key}_per_attractor")
-        if key == "aggregated":
-            if time_df is None:
-                time_df = result.dataframes.get("aggregated_time")
-            if time_df is None:
-                time_df = result.dataframes.get("unified_time")
-            if per_attr_df is None:
-                per_attr_df = result.dataframes.get("aggregated_per_attractor")
+        tpm_df = result.dataframes.get(f"{key}_tpm")
 
         figures = self.plotter.plot(
             data=result.dataframes[key],
@@ -909,6 +935,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
             save_dir=save_dir,
             time_df=time_df,
             per_attractor_df=per_attr_df,
+            tpm_df=tpm_df,
         )
         result.figures.extend(figures)
 

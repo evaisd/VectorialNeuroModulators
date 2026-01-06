@@ -12,7 +12,7 @@ import traceback
 
 import numpy as np
 
-from neuro_mod.execution.helpers.logger import Logger
+from neuro_mod.execution.helpers.logger import Logger, build_logger_from_settings
 
 
 def default_run_fn(stager: Any) -> dict:
@@ -38,11 +38,6 @@ def default_save_outputs(
     clusters = outputs.get("clusters") if isinstance(outputs, dict) else None
     if clusters is not None and idx == 0:
         np.save(save_dir / "clusters.npy", clusters)
-
-
-def build_logger_from_settings(settings: dict) -> Logger:
-    """Create a Logger instance from serialized settings."""
-    return Logger(**settings)
 
 
 def call_stager_factory(stager_factory: Callable[..., Any], seed: int, logger: Logger) -> Any:

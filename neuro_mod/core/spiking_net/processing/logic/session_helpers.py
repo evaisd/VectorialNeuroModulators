@@ -9,6 +9,7 @@ import numpy as np
 from neuro_mod.core.spiking_net.processing.logic import firing_rates as fr
 from neuro_mod.core.spiking_net.processing.logic import detection
 from neuro_mod.core.spiking_net.processing.logic import attractors
+from neuro_mod.core.spiking_net.utils import get_session_end_times_s
 
 
 def iter_spike_files(spikes_path: Path):
@@ -268,14 +269,17 @@ def merge_attractors_data(session_attractors, session_lengths, dt: float):
     return merged
 
 
-def get_session_end_times_s(session_lengths_steps: list[int], dt: float) -> list[float]:
-    """Get session end times in seconds.
-
-    Args:
-        session_lengths_steps: List of session lengths in time steps.
-        dt: Time step in seconds.
-
-    Returns:
-        List of session end times in seconds.
-    """
-    return (np.cumsum(session_lengths_steps) * dt).tolist()
+__all__ = [
+    "aggregate_series",
+    "get_session_attractors_data",
+    "get_session_cluster_activity",
+    "get_session_cluster_spike_rates",
+    "get_session_end_times_s",
+    "get_session_lengths_steps",
+    "get_total_duration_ms",
+    "iter_spike_files",
+    "load_sessions",
+    "merge_attractors_data",
+    "read_spikes_clusters",
+    "validate_no_cross_simulation_attractors",
+]

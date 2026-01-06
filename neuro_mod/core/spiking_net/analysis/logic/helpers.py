@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from neuro_mod.core.spiking_net.utils import get_session_end_times_s
+
 from neuro_mod.core.spiking_net.analysis.logic import time_window
 
 
@@ -118,19 +120,6 @@ def get_unique_attractor_first_start_times(attractors_data: dict) -> np.ndarray:
     if not first_starts:
         return np.empty((0,), dtype=float)
     return np.asarray(first_starts, dtype=float)
-
-
-def get_session_end_times_s(session_lengths_steps: list[int], dt: float) -> list[float]:
-    """Get session end times in seconds from step lengths.
-
-    Args:
-        session_lengths_steps: List of session lengths in time steps.
-        dt: Time step in seconds.
-
-    Returns:
-        List of session end times in seconds.
-    """
-    return (np.cumsum(session_lengths_steps) * dt).tolist()
 
 
 def can_use_loaded_attractors(

@@ -187,45 +187,39 @@ class SNNBatchProcessor:
             attractors_data with metadata lists added.
         """
         # Compute session boundaries in seconds
-        session_boundaries = [0.0]
-        cumulative_steps = 0
-        for length in session_lengths:
-            cumulative_steps += length
-            session_boundaries.append(cumulative_steps * self.dt)
+        cumulative_steps = np.cumsum([0] + session_lengths)
+        session_boundaries = cumulative_steps * self.dt
+        session_end_times = session_boundaries[1:]
 
         # For each attractor, add metadata for each occurrence
         for identity, data in attractors_data.items():
             starts = data.get("starts", [])
-            n_occurrences = len(starts)
+            if not starts:
+                data["repeat_indices"] = []
+                data["seeds"] = []
+                data["sweep_values"] = []
+                data["sweep_indices"] = []
+                continue
+            starts_arr = np.asarray(starts, dtype=float)
+            session_indices = np.searchsorted(session_end_times, starts_arr, side="right")
 
             # Initialize metadata lists
-            data["repeat_indices"] = []
-            data["seeds"] = []
-            data["sweep_values"] = []
-            data["sweep_indices"] = []
-
-            for start_time in starts:
-                # Find which session this occurrence belongs to
-                session_idx = 0
-                for i, (start, end) in enumerate(
-                    zip(session_boundaries[:-1], session_boundaries[1:])
-                ):
-                    if start <= start_time < end:
-                        session_idx = i
-                        break
-
-                # Get metadata for this session
-                if session_idx < len(session_metadata):
-                    meta = session_metadata[session_idx]
-                    data["repeat_indices"].append(meta.get("repeat_idx"))
-                    data["seeds"].append(meta.get("seed"))
-                    data["sweep_values"].append(meta.get("sweep_value"))
-                    data["sweep_indices"].append(meta.get("sweep_idx"))
-                else:
-                    data["repeat_indices"].append(None)
-                    data["seeds"].append(None)
-                    data["sweep_values"].append(None)
-                    data["sweep_indices"].append(None)
+            data["repeat_indices"] = [
+                session_metadata[idx].get("repeat_idx") if idx < len(session_metadata) else None
+                for idx in session_indices
+            ]
+            data["seeds"] = [
+                session_metadata[idx].get("seed") if idx < len(session_metadata) else None
+                for idx in session_indices
+            ]
+            data["sweep_values"] = [
+                session_metadata[idx].get("sweep_value") if idx < len(session_metadata) else None
+                for idx in session_indices
+            ]
+            data["sweep_indices"] = [
+                session_metadata[idx].get("sweep_idx") if idx < len(session_metadata) else None
+                for idx in session_indices
+            ]
 
         return attractors_data
 
