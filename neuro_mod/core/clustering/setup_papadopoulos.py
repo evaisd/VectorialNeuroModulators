@@ -128,12 +128,14 @@ def depress_formula(f_a, f_b, p, jab):
     Returns:
         Multiplicative depression factor.
     """
-    try:
-        nominator = f_a + f_b - f_a * f_b * (p + jab)
-        denominator = f_a + f_b - f_a * f_b * (p + 1.)
-        return nominator / denominator
-    except ZeroDivisionError:
-        return 1.
+    nominator = f_a + f_b - f_a * f_b * (p + jab)
+    denominator = f_a + f_b - f_a * f_b * (p + 1.)
+    if denominator == 0:
+        return 1.0
+    result = nominator / denominator
+    if not np.isfinite(result):
+        return 1.0
+    return result
 
 
 def _gen_block(

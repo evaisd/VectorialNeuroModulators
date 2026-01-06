@@ -57,6 +57,11 @@ def determine_stability(
         nu_star,
         f,
     )
+
+    # Check for NaN/Inf in Jacobian
+    if not np.all(np.isfinite(jacobian)):
+        return "undefined (numerical issues)", np.array([np.nan])
+
     eigvals = np.linalg.eig(jacobian)[0]
     real_parts = eigvals.real
 
