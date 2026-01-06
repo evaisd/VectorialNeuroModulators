@@ -8,7 +8,8 @@ def get_average_cluster_firing_rate(
         cluster_labels: np.ndarray,
         dt_ms: float = .5,
         kernel_param: float = 20.,
-        kernel_type: str = "gaussian",):
+        kernel_type: str = "gaussian",
+        n_excitatory_clusters: int | None = None,):
     """Compute average firing rates per cluster.
 
     Args:
@@ -17,6 +18,8 @@ def get_average_cluster_firing_rate(
         dt_ms: Time step in milliseconds.
         kernel_param: Kernel width parameter.
         kernel_type: `"gaussian"` or `"box"`.
+        n_excitatory_clusters: Number of excitatory clusters to include.
+            If provided, only the first n_excitatory_clusters are returned.
 
     Returns:
         Array of firing rates with shape `(n_clusters, T)`.
@@ -26,6 +29,8 @@ def get_average_cluster_firing_rate(
     firing_rates = get_firing_rates(clustered_spikes, dt_ms, kernel_param, kernel_type)
     cluster_counts = np.bincount(np.searchsorted(cluster_ids, cluster_labels))
     firing_rates /= cluster_counts[:, None]
+    if n_excitatory_clusters is not None:
+        firing_rates = firing_rates[:n_excitatory_clusters]
     return firing_rates
 
 
