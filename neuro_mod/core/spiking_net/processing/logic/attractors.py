@@ -62,7 +62,7 @@ def get_unique_attractors(activity_matrix: np.ndarray,):
 
 def extract_attractors(
         activity_matrix: np.ndarray,
-        minimal_time_ms: int,
+        minimal_time_ms: float,
         dt_ms: float = .5,
 ):
     """Extract attractor states and their occurrences from activity traces.
