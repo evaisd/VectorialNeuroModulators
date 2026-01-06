@@ -343,6 +343,7 @@ def demo_repeated_runs():
     pipeline = Pipeline(
         simulator_factory=mock_simulator_factory,
         processor_factory=mock_processor_factory,
+        batch_processor_factory=MockBatchProcessorFactory(),  # Required for repeated mode
         analyzer_factory=MockAnalyzer,
         plotter=SeabornPlotter(auto_generate=True),  # Auto-generate plots
     )
@@ -410,6 +411,7 @@ def demo_sweep_repeated():
     pipeline = Pipeline(
         simulator_factory=sweep_simulator_factory,
         processor_factory=mock_processor_factory,
+        batch_processor_factory=MockBatchProcessorFactory(),  # Required for sweep+repeated mode
         analyzer_factory=MockAnalyzer,
         plotter=SeabornPlotter(auto_generate=True),
     )
@@ -420,7 +422,6 @@ def demo_sweep_repeated():
         sweep_param="n_attractors",
         sweep_values=[5, 10, 15, 20],
         base_seed=789,
-        unified_processing=False,  # Per-run processing (old behavior)
         parallel=False,
         save_dir=REPO_ROOT / "experiments" / "demo_sweep_repeated",
         log_level="INFO",
@@ -454,7 +455,6 @@ def demo_unified_repeated():
         mode=ExecutionMode.REPEATED,
         n_repeats=5,
         base_seed=111,
-        unified_processing=True,  # Process all repeats together
         save_dir=REPO_ROOT / "experiments" / "demo_unified_repeated",
         log_level="INFO",
     ))
@@ -502,7 +502,6 @@ def demo_unified_sweep_repeated():
         sweep_param="n_attractors",
         sweep_values=[5, 10, 15],
         base_seed=222,
-        unified_processing=True,  # Unified per sweep value
         save_dir=REPO_ROOT / "experiments" / "demo_unified_sweep_repeated",
         log_level="INFO",
     ))

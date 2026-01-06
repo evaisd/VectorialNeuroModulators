@@ -7,8 +7,8 @@ using the Pipeline for reproducibility, processing, and analysis.
 Usage:
     python scripts/run_perturbed_snn.py --config configs/snn_params_with_perturbation.yaml
 
-    # Multiple repeats with unified processing
-    python scripts/run_perturbed_snn.py --config configs/snn_params_with_perturbation.yaml --n-repeats 5 --unified
+    # Multiple repeats (unified processing for consistent attractor IDs)
+    python scripts/run_perturbed_snn.py --config configs/snn_params_with_perturbation.yaml --n-repeats 5
 """
 
 from __future__ import annotations
@@ -87,11 +87,6 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
         choices=("thread", "process"),
         default="thread",
         help="Parallel executor backend.",
-    )
-    parser.add_argument(
-        "--unified",
-        action="store_true",
-        help="Use unified processing for consistent attractor IDs across repeats.",
     )
     parser.add_argument(
         "--no-plots",
@@ -295,9 +290,8 @@ def main() -> int:
     # Create pipeline components
     simulator_factory = create_perturbed_simulator_factory(config, perturbations)
     processor_factory = create_processor_factory()
-    batch_processor_factory = (
-        SNNBatchProcessorFactory() if args.unified and args.n_repeats > 1 else None
-    )
+    # Batch processor required for repeated mode (unified processing)
+    batch_processor_factory = SNNBatchProcessorFactory() if args.n_repeats > 1 else None
     plotter = None if args.no_plots else create_plotter()
 
     # Create pipeline
@@ -322,7 +316,6 @@ def main() -> int:
         save_processed=True,
         save_analysis=True,
         save_plots=not args.no_plots,
-        unified_processing=args.unified,
         log_level=args.log_level,
     )
 

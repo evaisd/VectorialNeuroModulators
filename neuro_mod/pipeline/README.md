@@ -165,9 +165,6 @@ config = PipelineConfig(
     run_analysis=True,
     run_plotting=True,
 
-    # Unified processing (for consistent attractor IDs)
-    unified_processing=True,
-
     # Logging
     log_level="INFO",
     log_to_file=True,
@@ -176,13 +173,13 @@ config = PipelineConfig(
 
 ### Unified Processing
 
-When `unified_processing=True`, all repeats are processed together to ensure consistent attractor identification across runs:
+For REPEATED and SWEEP_REPEATED modes, all repeats are processed together to ensure consistent attractor identification across runs. This is handled automatically by the pipeline.
 
-- **REPEATED mode**: All repeats processed together
-- **SWEEP mode**: Each sweep value processed separately
+- **REPEATED mode**: All repeats processed together for consistent attractor IDs
+- **SWEEP mode**: Each sweep value processed separately (single run per value)
 - **SWEEP_REPEATED mode**: Repeats within each sweep value are unified; different sweep values are kept separate (different dynamics)
 
-This requires a `batch_processor_factory`:
+This requires a `batch_processor_factory` when using repeated modes:
 
 ```python
 from neuro_mod.core.spiking_net.processing import SNNBatchProcessorFactory
@@ -190,7 +187,7 @@ from neuro_mod.core.spiking_net.processing import SNNBatchProcessorFactory
 pipeline = Pipeline(
     simulator_factory=...,
     processor_factory=...,
-    batch_processor_factory=SNNBatchProcessorFactory(),  # Enable unified processing
+    batch_processor_factory=SNNBatchProcessorFactory(),  # Required for REPEATED/SWEEP_REPEATED
     analyzer_factory=SNNAnalyzer,
 )
 ```
@@ -517,7 +514,6 @@ config = PipelineConfig(
     parallel=True,
     max_workers=4,
     save_dir=Path("experiments/snn_repeated"),
-    unified_processing=True,
     log_level="INFO",
 )
 
@@ -572,6 +568,20 @@ experiments/run_001/
 │   ├── duration_scatter.png
 │   └── ...
 └── pipeline.log
+```
+
+`batch_config.json` includes timing metadata for unified runs:
+
+```json
+{
+  "dt": 0.0005,
+  "total_duration_ms": 123456.0,
+  "n_runs": 2,
+  "repeats": [
+    {"repeat_idx": 0, "duration_ms": 12345.0, "seed": 101},
+    {"repeat_idx": 1, "duration_ms": 12345.0, "seed": 102}
+  ]
+}
 ```
 
 ## API Reference

@@ -9,11 +9,11 @@ Usage:
     # Single run
     python scripts/run_pipeline_example.py --config configs/snn_test_run.yaml
 
-    # Repeated runs with unified processing (consistent attractor IDs)
-    python scripts/run_pipeline_example.py --mode repeated --n-repeats 5 --unified
+    # Repeated runs (consistent attractor IDs via unified processing)
+    python scripts/run_pipeline_example.py --mode repeated --n-repeats 5
 
     # Parameter sweep with repeats (hierarchy: sweep_value -> attractors)
-    python scripts/run_pipeline_example.py --mode sweep_repeated --n-repeats 3 --unified
+    python scripts/run_pipeline_example.py --mode sweep_repeated --n-repeats 3
 """
 
 from __future__ import annotations
@@ -159,11 +159,6 @@ def main() -> int:
         help="Enable parallel execution",
     )
     parser.add_argument(
-        "--unified",
-        action="store_true",
-        help="Use unified processing for consistent attractor IDs across repeats",
-    )
-    parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
@@ -186,14 +181,24 @@ def main() -> int:
         return 1
 
     logger.info(f"Running pipeline example with config: {args.config}")
-    logger.info(f"Mode: {args.mode}, Unified: {args.unified}, Save dir: {args.save_dir}")
+    logger.info(f"Mode: {args.mode}, Save dir: {args.save_dir}")
+
+    # Determine execution mode
+    mode_map = {
+        "single": ExecutionMode.SINGLE,
+        "repeated": ExecutionMode.REPEATED,
+        "sweep": ExecutionMode.SWEEP,
+        "sweep_repeated": ExecutionMode.SWEEP_REPEATED,
+    }
+    mode = mode_map[args.mode]
 
     # Create pipeline components
     simulator_factory = create_simulator_factory(args.config)
     processor_factory = create_processor_factory()
 
-    # Create batch processor factory if unified processing is enabled
-    batch_processor_factory = SNNBatchProcessorFactory() if args.unified else None
+    # Create batch processor factory (required for repeated/sweep_repeated modes)
+    needs_batch = mode in (ExecutionMode.REPEATED, ExecutionMode.SWEEP_REPEATED)
+    batch_processor_factory = SNNBatchProcessorFactory() if needs_batch else None
 
     plotter = create_plotter()
 
@@ -206,15 +211,6 @@ def main() -> int:
         plotter=plotter,
     )
 
-    # Determine execution mode
-    mode_map = {
-        "single": ExecutionMode.SINGLE,
-        "repeated": ExecutionMode.REPEATED,
-        "sweep": ExecutionMode.SWEEP,
-        "sweep_repeated": ExecutionMode.SWEEP_REPEATED,
-    }
-    mode = mode_map[args.mode]
-
     # Build config
     config_kwargs = {
         "mode": mode,
@@ -224,7 +220,6 @@ def main() -> int:
         "log_level": args.log_level,
         "save_processed": True,
         "save_plots": True,
-        "unified_processing": args.unified,
     }
 
     if mode in (ExecutionMode.REPEATED, ExecutionMode.SWEEP_REPEATED):
@@ -250,7 +245,6 @@ def main() -> int:
     logger.info("PIPELINE RESULTS SUMMARY")
     logger.info("=" * 60)
     logger.info(f"Mode: {result.mode.name}")
-    logger.info(f"Unified Processing: {args.unified}")
     logger.info(f"Duration: {result.duration_seconds:.2f}s")
     logger.info(f"Seeds used: {result.seeds_used}")
     logger.info(f"DataFrames: {list(result.dataframes.keys())}")
