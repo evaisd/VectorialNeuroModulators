@@ -82,20 +82,16 @@ class PipelineConfig:
     run_analysis: bool = True
     run_plotting: bool = True
 
-    # Processing mode
-    unified_processing: bool = True
-    """If True, process all repeats together for consistent attractor IDs.
-
-    For REPEATED mode: all repeats processed together.
-    For SWEEP mode: each sweep value processed separately (no unification).
-    For SWEEP_REPEATED mode: repeats within each sweep value processed together,
-        but different sweep values processed separately (different dynamics).
-    """
-
     # Logging
     log_level: str = "INFO"
     log_to_file: bool = True
+    verbose_memory: bool = False
+    """If True, log memory usage after each repeat (useful for debugging memory issues)."""
     progress_callback: Any = None  # Callable[[int, int, str], None] | None
+
+    # Time evolution sampling
+    time_evolution_dt: float | None = None
+    time_evolution_num_steps: int | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
@@ -115,6 +111,13 @@ class PipelineConfig:
             raise ValueError(
                 f"log_level must be DEBUG/INFO/WARNING/ERROR, got {self.log_level!r}"
             )
+
+        # Repeated and sweep+repeated modes require save_dir for disk-based processing
+        if self.mode in (ExecutionMode.REPEATED, ExecutionMode.SWEEP_REPEATED):
+            if self.save_dir is None:
+                raise ValueError(
+                    f"{self.mode.name} mode requires save_dir to be set for disk-based processing"
+                )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert config to a JSON-serializable dictionary."""
@@ -136,9 +139,11 @@ class PipelineConfig:
             "run_processing": self.run_processing,
             "run_analysis": self.run_analysis,
             "run_plotting": self.run_plotting,
-            "unified_processing": self.unified_processing,
             "log_level": self.log_level,
             "log_to_file": self.log_to_file,
+            "verbose_memory": self.verbose_memory,
+            "time_evolution_dt": self.time_evolution_dt,
+            "time_evolution_num_steps": self.time_evolution_num_steps,
         }
 
     @classmethod
@@ -151,6 +156,9 @@ class PipelineConfig:
             data["save_dir"] = Path(data["save_dir"])
         # Remove non-serializable fields
         data.pop("progress_callback", None)
+        # Remove deprecated fields (for backward compatibility with old configs)
+        data.pop("streaming", None)
+        data.pop("unified_processing", None)
         return cls(**data)
 
 
