@@ -10,6 +10,9 @@ from typing import Any
 import numpy as np
 
 from neuro_mod.data_processing.base_processor import _BaseSimProcessor
+from neuro_mod.core.spiking_net.processing.logic import attractors
+from neuro_mod.core.spiking_net.processing.logic import detection
+from neuro_mod.core.spiking_net.processing.logic import firing_rates as fr
 from neuro_mod.core.spiking_net.processing.logic import session_helpers as helpers
 
 
@@ -44,11 +47,40 @@ class SNNBatchProcessor:
         self.clustering_params = clustering_params or SNNProcessor.DEFAULT_CLUSTERING_PARAMS.copy()
         self.minimal_life_span_ms = minimal_life_span_ms
         self._processed_data: dict | None = None
+        self._total_duration_ms: float = 0.0
+        self._session_lengths_steps: list[int] = []
+        self._repeat_durations_ms: list[float] = []
 
     @property
     def processed_data(self) -> dict | None:
         """Return the processed data, or None if not yet processed."""
         return self._processed_data
+
+    @property
+    def total_duration_ms(self) -> float:
+        """Return total simulation duration in milliseconds."""
+        return self._total_duration_ms
+
+    @property
+    def session_lengths_steps(self) -> list[int]:
+        """Return session lengths in time steps."""
+        return self._session_lengths_steps
+
+    @property
+    def repeat_durations_ms(self) -> list[float]:
+        """Return per-repeat durations in milliseconds."""
+        return self._repeat_durations_ms
+
+    def get_config(self) -> dict[str, Any]:
+        """Return configuration dict for use with analyzer."""
+        return {
+            "dt": self.dt,
+            "total_duration_ms": self._total_duration_ms,
+            "minimal_life_span_ms": self.minimal_life_span_ms,
+            "session_lengths_steps": self._session_lengths_steps,
+            "repeat_durations_ms": self._repeat_durations_ms,
+            "n_runs": len(self.raw_outputs),
+        }
 
     def process_batch(
         self,
@@ -68,37 +100,49 @@ class SNNBatchProcessor:
         Returns:
             Unified processed data with metadata embedded in occurrences.
         """
-        # Collect all sessions with their source metadata
-        all_sessions = []
-        session_metadata = []  # Track which metadata applies to each session
+        # Collect per-session attractors without retaining full raw sessions.
+        session_attractors = []
+        session_lengths = []
+        session_metadata = []
+        repeat_durations_ms = []
+        total_duration_ms = 0.0
 
-        for i, (raw, meta) in enumerate(zip(raw_outputs, metadata)):
+        params = self.clustering_params.copy()
+        params.setdefault("dt_ms", self.dt / 1e-3)
+
+        for raw, meta in zip(raw_outputs, metadata):
             spikes_path = Path(raw["spikes_path"])
             clusters_path = Path(raw["clusters_path"]) if raw.get("clusters_path") else None
 
-            # Load sessions for this output
             sessions = helpers.load_sessions(spikes_path, clusters_path)
-            for sess in sessions:
-                all_sessions.append(sess)
+            repeat_duration_ms = 0.0
+            for spikes, clusters in sessions:
+                rates = fr.get_average_cluster_firing_rate(
+                    spikes,
+                    clusters,
+                    **params,
+                )
+                activity = detection.get_activity(rates)
+                session_attractors.append(
+                    attractors.extract_attractors(
+                        activity,
+                        self.minimal_life_span_ms,
+                        self.dt * 1e3,
+                    )
+                )
+                session_lengths.append(activity.shape[1])
                 session_metadata.append(meta.copy())
+                session_duration_ms = self.dt * spikes.shape[0] * 1e3
+                total_duration_ms += session_duration_ms
+                repeat_duration_ms += session_duration_ms
+            repeat_durations_ms.append(repeat_duration_ms)
 
-        if not all_sessions:
+        if not session_attractors:
             self._processed_data = {}
+            self._repeat_durations_ms = repeat_durations_ms
+            self._session_lengths_steps = []
+            self._total_duration_ms = 0.0
             return self._processed_data
-
-        # Process all sessions together for consistent attractor IDs
-        session_rates = helpers.get_session_cluster_spike_rates(
-            tuple(all_sessions),
-            self.clustering_params,
-            self.dt,
-        )
-        session_activity = helpers.get_session_cluster_activity(session_rates)
-        session_attractors = helpers.get_session_attractors_data(
-            session_activity,
-            self.minimal_life_span_ms,
-            self.dt * 1e3,
-        )
-        session_lengths = helpers.get_session_lengths_steps(session_activity)
 
         # Validate and merge
         helpers.validate_no_cross_simulation_attractors(session_attractors, session_lengths)
@@ -114,6 +158,11 @@ class SNNBatchProcessor:
             session_lengths,
             session_metadata,
         )
+
+        # Store session lengths and compute total duration
+        self._session_lengths_steps = session_lengths
+        self._total_duration_ms = total_duration_ms
+        self._repeat_durations_ms = repeat_durations_ms
 
         self._processed_data = attractors_data
         return attractors_data
@@ -198,15 +247,41 @@ class SNNBatchProcessor:
         # Save attractors data
         np.save(path / "attractors.npy", self._processed_data, allow_pickle=True)
 
-        # Save config
+        # Save config (compatible with SNNAnalyzer._load_config)
         config = {
             "n_runs": len(self.raw_outputs),
             "dt": self.dt,
             "clustering_params": self.clustering_params,
             "minimal_life_span_ms": self.minimal_life_span_ms,
+            "total_duration_ms": self._total_duration_ms,
+            "session_lengths_steps": self._session_lengths_steps,
+            "repeat_durations_ms": self._repeat_durations_ms,
+            "starts_ends_unit": "seconds",
             "metadata": self.metadata,
+            "files": {
+                "attractors": "attractors.npy",
+            },
         }
-        (path / "batch_config.json").write_text(json.dumps(config, indent=2))
+        # Save as processor_config.json for SNNAnalyzer compatibility
+        (path / "processor_config.json").write_text(
+            json.dumps(config, indent=2, sort_keys=True)
+        )
+        batch_config = {
+            "dt": self.dt,
+            "total_duration_ms": self._total_duration_ms,
+            "n_runs": len(self.raw_outputs),
+            "repeats": [
+                {
+                    "repeat_idx": i,
+                    "duration_ms": duration_ms,
+                    "seed": self.metadata[i].get("seed") if i < len(self.metadata) else None,
+                }
+                for i, duration_ms in enumerate(self._repeat_durations_ms)
+            ],
+        }
+        (path / "batch_config.json").write_text(
+            json.dumps(batch_config, indent=2, sort_keys=True)
+        )
 
         return path
 
@@ -341,6 +416,20 @@ class SNNProcessor(_BaseSimProcessor):
         if self._total_duration_ms is None:
             self._total_duration_ms = helpers.get_total_duration_ms(self.sessions, self.dt)
         return self._total_duration_ms
+
+    def get_config(self) -> dict[str, Any]:
+        """Return configuration dict for use with analyzer."""
+        return {
+            "spikes_path": str(self.spikes_path),
+            "clusters_path": str(self.clusters_path) if self.clusters_path else None,
+            "dt": self.dt,
+            "clustering_params": self.clustering_params,
+            "minimal_life_span_ms": self.minimal_life_span_ms,
+            "num_sessions": self.num_sessions,
+            "session_lengths_steps": self._get_session_lengths_steps(),
+            "total_duration_ms": self.total_duration_ms,
+            "starts_ends_unit": "seconds",
+        }
 
     @lru_cache()
     def _get_session_cluster_spike_rates(self) -> list[np.ndarray]:
