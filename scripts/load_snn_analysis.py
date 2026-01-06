@@ -68,6 +68,11 @@ def main() -> int:
     print(f"Transition matrix shape: {analyzer.get_transition_matrix().shape}")
     print(f"Total duration: {analyzer.total_duration_ms:.2f} ms")
     print(f"Time step (dt): {analyzer.dt} s")
+    if analyzer.repeat_durations_ms:
+        repeat_durations = ", ".join(f"{d:.2f}" for d in analyzer.repeat_durations_ms)
+        print(f"Repeat durations: [{repeat_durations}] ms")
+    if analyzer.n_runs is not None:
+        print(f"Number of runs: {analyzer.n_runs}")
 
     # Get summary metrics
     metrics = analyzer.get_summary_metrics()

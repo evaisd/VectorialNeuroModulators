@@ -46,12 +46,15 @@ class SNNAnalyzer(_BaseAnalyzer):
         self._config = config or {}
         self._attractor_map: dict | None = None
         self._transition_matrix: np.ndarray | None = None
+        self.processed_time_df = pd.DataFrame()
 
         # Extract config values
         self.dt = self._config.get("dt", 0.5e-3)
         self.total_duration_ms = self._config.get("total_duration_ms", 0.0)
         self.minimal_life_span_ms = self._config.get("minimal_life_span_ms", 20.0)
         self.session_lengths_steps = self._config.get("session_lengths_steps", [])
+        self.repeat_durations_ms = self._config.get("repeat_durations_ms", [])
+        self.n_runs = self._config.get("n_runs")
 
     def _load_from_path(self, path: Path) -> dict:
         """Load attractors_data from a directory.
@@ -92,9 +95,26 @@ class SNNAnalyzer(_BaseAnalyzer):
             The configuration dictionary.
         """
         config_path = path / "processor_config.json"
+        batch_config_path = path / "batch_config.json"
+        config: dict[str, Any] = {}
         if config_path.exists():
-            return json.loads(config_path.read_text())
-        return {}
+            config = json.loads(config_path.read_text())
+        if batch_config_path.exists():
+            batch_config = json.loads(batch_config_path.read_text())
+            config.setdefault("batch", batch_config)
+            repeats = batch_config.get("repeats", [])
+            repeat_durations = [
+                repeat.get("duration_ms")
+                for repeat in repeats
+                if repeat.get("duration_ms") is not None
+            ]
+            config.setdefault("repeat_durations_ms", repeat_durations)
+            config.setdefault("n_runs", batch_config.get("n_runs"))
+        return config
+
+    def get_batch_config(self) -> dict[str, Any]:
+        """Return batch configuration metadata if available."""
+        return self._config.get("batch", {})
 
     @property
     def attractors_data(self) -> dict:
@@ -213,6 +233,27 @@ class SNNAnalyzer(_BaseAnalyzer):
 
         return df
 
+    @staticmethod
+    def aggregate_per_attractor_df(df: pd.DataFrame) -> pd.DataFrame:
+        """Aggregate occurrence-level data into per-attractor summaries."""
+        if df.empty:
+            return pd.DataFrame()
+        agg = df.groupby("attractor_idx").agg(
+            occurrences=("idx", "count"),
+            total_duration=("duration", "sum"),
+            mean_duration=("duration", "mean"),
+            std_duration=("duration", "std"),
+            num_clusters=("num_clusters", "first"),
+            first_start=("t_start", "min"),
+            last_end=("t_end", "max"),
+        ).reset_index()
+        agg["std_duration"] = agg["std_duration"].fillna(0)
+        return agg
+
+    def get_per_attractor_dataframe(self) -> pd.DataFrame:
+        """Return per-attractor summary dataframe."""
+        return self.aggregate_per_attractor_df(self.to_dataframe())
+
     def get_summary_metrics(self) -> dict[str, Any]:
         """Extract summary metrics from the attractors_data.
 
@@ -223,10 +264,13 @@ class SNNAnalyzer(_BaseAnalyzer):
         lifespans_mean, lifespans_std = self.get_life_spans()
         probs = self.get_attractor_probs()
         occurrences = self.get_occurrences()
+        total_duration_ms = self.total_duration_ms
+        if total_duration_ms == 0.0 and self.session_lengths_steps:
+            total_duration_ms = sum(self.session_lengths_steps) * self.dt * 1e3
 
         return {
             "num_states": num_states,
-            "total_duration_ms": self.total_duration_ms,
+            "total_duration_s": total_duration_ms / 1e3,
             "mean_lifespan_ms": float(lifespans_mean.mean()) if lifespans_mean.size > 0 else 0.0,
             "total_occurrences": int(occurrences.sum()) if occurrences.size > 0 else 0,
             "mean_probability": float(probs.mean()) if probs.size > 0 else 0.0,
@@ -673,7 +717,9 @@ class SNNAnalyzer(_BaseAnalyzer):
         norms = np.zeros(times.size - 1, dtype=float)
         for i in range(1, times.size):
             tm_next = embed_matrix(self.get_attractors_data(t_from=0, t_to=float(times[i])))
-            norms[i - 1] = np.linalg.norm(tm_next - tm_prev)
+            num = np.linalg.norm(tm_next - tm_prev)
+            den = np.linalg.norm(tm_next) + np.linalg.norm(tm_prev)
+            norms[i - 1] = 2.0 * num / (den + 1e-12)
             tm_prev = tm_next
         return times[1:], norms
 
@@ -697,21 +743,40 @@ class SNNAnalyzer(_BaseAnalyzer):
             num_steps=num_steps,
         )
         if times_s.size == 0:
-            return pd.DataFrame(
-                columns=["time_ms", "transition_l2_norm", "unique_attractors_count"]
+            self.processed_time_df = pd.DataFrame(
+                columns=[
+                    "time_ms",
+                    "transition_l2_norm",
+                    "unique_attractors_count",
+                    "discovery_rate_per_s",
+                ]
             )
+            return self.processed_time_df
         times_ms = times_s * 1e3
         unique_counts = np.array(
             [self.get_unique_attractors_count_until_time(t_ms) for t_ms in times_ms],
             dtype=int,
         )
-        return pd.DataFrame(
+        discovery_rate = np.zeros_like(times_ms, dtype=float)
+        if times_ms.size > 1:
+            time_s = times_ms / 1e3
+            dt_s = np.diff(time_s)
+            new_attractors = np.diff(unique_counts)
+            discovery_rate[1:] = np.divide(
+                new_attractors,
+                dt_s,
+                out=np.zeros_like(dt_s, dtype=float),
+                where=dt_s > 0,
+            )
+        self.processed_time_df = pd.DataFrame(
             {
                 "time_ms": times_ms,
                 "transition_l2_norm": norms,
                 "unique_attractors_count": unique_counts,
+                "discovery_rate_per_s": discovery_rate,
             }
         )
+        return self.processed_time_df
 
     # --- Helper methods ---
 
