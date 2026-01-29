@@ -18,7 +18,7 @@ legend.fontsize : 9
 # --- Axes ---
 axes.grid : False
 axes.linewidth : 0.8
-axes.prop_cycle : cycler('color', ['#4c72b0', '#dd8452', '#55a868', '#c44e52', '#8172b3', '#937860'])
+axes.prop_cycle : cycler('color', [(0.298, 0.447, 0.690), (0.867, 0.518, 0.322), (0.333, 0.659, 0.408), (0.769, 0.306, 0.322), (0.506, 0.447, 0.702), (0.576, 0.471, 0.376)])
 
 # --- Lines & markers ---
 lines.linewidth : 2.0
