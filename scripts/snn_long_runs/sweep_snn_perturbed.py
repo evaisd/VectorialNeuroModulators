@@ -141,7 +141,7 @@ def _apply_style(style: str, root: Path) -> None:
         else:
             plt.style.use(style)
     except OSError as exc:
-        print(f\"Warning: failed to apply style '{style}': {exc}\")
+        print(f"Warning: failed to apply style '{style}': {exc}")
 
 
 class _RasterPlotRunner:
