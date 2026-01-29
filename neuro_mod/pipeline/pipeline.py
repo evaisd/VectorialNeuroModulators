@@ -126,6 +126,8 @@ class Pipeline(Generic[TRaw, TProcessed]):
         result.duration_seconds = time.time() - start_time
         self.logger.info(f"Pipeline complete in {result.duration_seconds:.2f}s")
 
+        self._align_transition_matrices(result)
+
         # Save results if save_dir specified
         if config.save_dir:
             self._save_results(config, result)
@@ -168,6 +170,8 @@ class Pipeline(Generic[TRaw, TProcessed]):
 
         result.duration_seconds = time.time() - start_time
         self.logger.info(f"Processing complete in {result.duration_seconds:.2f}s")
+
+        self._align_transition_matrices(result)
 
         if config.save_dir:
             self._save_results(config, result)
@@ -970,6 +974,21 @@ class Pipeline(Generic[TRaw, TProcessed]):
         result.figures.extend(figures)
 
         self.logger.info(f"Generated {len(figures)} plot(s)")
+
+    def _align_transition_matrices(self, result: PipelineResult) -> None:
+        """Align transition matrices across runs and store in result.dataframes."""
+        if not hasattr(result, "align_transition_matrices"):
+            return
+        try:
+            canonical_labels, aligned = result.align_transition_matrices(labels="identity")
+        except Exception as exc:
+            self.logger.warning(f"Failed to align transition matrices: {exc}")
+            return
+        if not aligned:
+            return
+        result.dataframes["tpm_labels"] = pd.DataFrame({"label": canonical_labels})
+        for key, tpm in aligned.items():
+            result.dataframes[f"{key}_tpm_aligned"] = tpm
 
     def _save_results(self, config: PipelineConfig, result: PipelineResult) -> None:
         """Save pipeline results to disk."""
