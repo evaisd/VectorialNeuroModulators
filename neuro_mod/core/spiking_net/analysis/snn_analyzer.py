@@ -214,18 +214,30 @@ class SNNAnalyzer(BaseAnalyzer):
         *,
         t_from: float | None = None,
         t_to: float | None = None,
+        labels: str = "idx",
+        canonical_labels: list[Any] | None = None,
     ) -> pd.DataFrame:
         matrix = self.get_transition_matrix(t_from=t_from, t_to=t_to)
-        indices = self._get_attractor_indices_in_order(t_from=t_from, t_to=t_to)
+        attractors_data = self.get_attractors_data(t_from=t_from, t_to=t_to)
 
-        if indices and matrix.shape[0] == len(indices):
-            df = pd.DataFrame(matrix, index=indices, columns=indices)
-            mapping = pd.Series(self.attractor_map).sort_values()
-            ordered = [idx for idx in mapping.index if idx in df.index]
-            if ordered and len(ordered) == df.shape[0]:
-                df = df.loc[ordered, ordered]
-            return df
-        return pd.DataFrame(matrix)
+        if labels == "identity":
+            identities = helpers.get_attractor_identities_in_order(attractors_data)
+            df = pd.DataFrame(matrix, index=identities, columns=identities)
+        else:
+            indices = self._get_attractor_indices_in_order(t_from=t_from, t_to=t_to)
+            if indices and matrix.shape[0] == len(indices):
+                df = pd.DataFrame(matrix, index=indices, columns=indices)
+                mapping = pd.Series(self.attractor_map).sort_values()
+                ordered = [idx for idx in mapping.index if idx in df.index]
+                if ordered and len(ordered) == df.shape[0]:
+                    df = df.loc[ordered, ordered]
+            else:
+                df = pd.DataFrame(matrix)
+
+        if canonical_labels is not None:
+            df = helpers.align_transition_matrix(df, canonical_labels)
+
+        return df
 
     @manipulation("time_evolution")
     def time_evolution(

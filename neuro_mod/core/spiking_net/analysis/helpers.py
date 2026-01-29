@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Iterable, Sequence
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from neuro_mod.core.spiking_net.utils import get_session_end_times_s
 from neuro_mod.core.spiking_net.analysis.logic import time_window
 
 
 __all__ = [
+    "align_transition_matrix",
+    "align_transition_matrices",
+    "build_canonical_attractor_identities",
+    "build_canonical_labels_from_tpms",
     "load_from_path",
     "load_config",
     "get_attractor_indices_in_order",
@@ -36,6 +41,56 @@ def build_attractor_map(attractors_data: dict) -> dict:
         Dict mapping index to identity tuple.
     """
     return {attractors_data[k]["idx"]: k for k in attractors_data.keys()}
+
+
+def _identity_sort_key(identity: Any) -> tuple[int, Any]:
+    if isinstance(identity, (frozenset, set)):
+        return (0, tuple(sorted(identity)))
+    if isinstance(identity, (tuple, list)):
+        return (0, tuple(identity))
+    if isinstance(identity, (int, float, str)):
+        return (1, identity)
+    return (1, repr(identity))
+
+
+def build_canonical_attractor_identities(
+    attractors_runs: Iterable[dict],
+) -> list[Any]:
+    identities: set[Any] = set()
+    for attractors_data in attractors_runs:
+        identities.update(attractors_data.keys())
+    return sorted(identities, key=_identity_sort_key)
+
+
+def build_canonical_labels_from_tpms(
+    tpms: Iterable[pd.DataFrame],
+) -> list[Any]:
+    labels: set[Any] = set()
+    for tpm in tpms:
+        labels.update(tpm.index)
+        labels.update(tpm.columns)
+    return sorted(labels, key=_identity_sort_key)
+
+
+def align_transition_matrix(
+    tpm: pd.DataFrame,
+    canonical_labels: Sequence[Any],
+) -> pd.DataFrame:
+    return tpm.reindex(index=canonical_labels, columns=canonical_labels, fill_value=0.0)
+
+
+def align_transition_matrices(
+    tpms: dict[str, pd.DataFrame],
+    *,
+    canonical_labels: Sequence[Any] | None = None,
+) -> tuple[list[Any], dict[str, pd.DataFrame]]:
+    if canonical_labels is None:
+        canonical_labels = build_canonical_labels_from_tpms(tpms.values())
+    aligned = {
+        key: align_transition_matrix(tpm, canonical_labels)
+        for key, tpm in tpms.items()
+    }
+    return list(canonical_labels), aligned
 
 
 def convert_attractors_data_steps_to_seconds(attractors_data: dict, dt: float) -> dict:
