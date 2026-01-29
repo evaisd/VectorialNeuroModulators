@@ -210,6 +210,10 @@ result.metrics["aggregated"]
 # Time evolution data (if analyzer provides it)
 result.dataframes["aggregated_time"]
 
+# Transition matrices (aligned across runs)
+result.dataframes["tpm_labels"]           # Canonical label order
+result.dataframes["repeat_0_tpm_aligned"] # Aligned TPM for a run
+
 # Metadata
 result.seeds_used              # List of seeds used
 result.duration_seconds        # Execution time
