@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sweep rate perturbation values; run N repeats per value.
+"""Sweep perturbation coefficients; run N repeats per value.
 
 Example:
   python scripts/sweep_snn_perturbed.py \
@@ -7,6 +7,13 @@ Example:
     --save-dir simulations/snn_rate_sweep \
     --sweep-values -2 -1 0 1 2 \
     --n-repeats 20
+
+  # Multi-vector coefficients
+  python scripts/sweep_snn_perturbed.py \
+    --config configs/snn_long_run_perturbed.yaml \
+    --save-dir simulations/snn_rate_sweep \
+    --params-grid 0.05,0.1 0.1,0.05 \
+    --n-repeats 10
 """
 
 from __future__ import annotations
@@ -14,13 +21,14 @@ from __future__ import annotations
 import argparse
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 import yaml
 import matplotlib.pyplot as plt
 
 from neuro_mod.core.spiking_net.processing import SNNBatchProcessorFactory, SNNProcessor
+from neuro_mod.core.perturbations.vectorial import VectorialPerturbation
 from neuro_mod.execution.helpers.cli import resolve_path, save_cmd
 from neuro_mod.execution.stagers import StageSNNSimulation
 from neuro_mod.pipeline import ExecutionMode, Pipeline, PipelineConfig
@@ -48,12 +56,18 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
         default=str(root / "style/neuroips.mplstyle"),
         help="Matplotlib style name or path to a .mplstyle file.",
     )
-    parser.add_argument(
+    sweep_group = parser.add_mutually_exclusive_group(required=True)
+    sweep_group.add_argument(
         "--sweep-values",
         nargs="+",
         type=float,
-        required=True,
-        help="Rate perturbation values to sweep.",
+        help="Coefficient values for a single perturbation vector.",
+    )
+    sweep_group.add_argument(
+        "--params-grid",
+        nargs="+",
+        default=None,
+        help="Comma-separated coefficient vectors for multi-vector sweeps (e.g. 0.1,0.2 0.2,0.1).",
     )
     parser.add_argument(
         "--n-repeats",
@@ -162,14 +176,19 @@ class _RasterPlotRunner:
         return outputs
 
 
-def _format_sweep_dir(base: Path, value: float) -> Path:
-    token = f"{value}".replace("-", "m").replace(".", "p")
-    return base / f"rate_{token}"
+def _format_params_dir(base: Path, params: Iterable[float]) -> Path:
+    token = "_".join(
+        f"{value}".replace("-", "m").replace(".", "p") for value in params
+    )
+    return base / f"params_{token}"
 
 
-def _load_n_clusters(config_path: Path) -> int:
+def _load_sim_config(config_path: Path) -> dict[str, Any]:
     with open(config_path) as f:
-        sim_config = yaml.safe_load(f)
+        return yaml.safe_load(f)
+
+
+def _load_n_clusters(sim_config: dict[str, Any]) -> int:
     clusters_cfg = sim_config.get("architecture", {}).get("clusters", {})
     n_clusters = clusters_cfg.get("n_clusters")
     if n_clusters is None:
@@ -177,6 +196,88 @@ def _load_n_clusters(config_path: Path) -> int:
     if n_clusters is None:
         raise ValueError("Missing architecture.clusters.n_clusters in config")
     return int(n_clusters)
+
+
+def _select_rate_perturbation_cfg(perturbation_cfg: dict[str, Any]) -> dict[str, Any]:
+    if "rate" in perturbation_cfg and isinstance(perturbation_cfg["rate"], dict):
+        return perturbation_cfg["rate"]
+    return perturbation_cfg
+
+
+def _get_time_vector(rate_cfg: dict[str, Any], init_params: dict[str, Any]) -> np.ndarray | None:
+    time_dependence = rate_cfg.get("time_dependence")
+    if not time_dependence or "shape" not in time_dependence:
+        return None
+    dt = init_params.get("delta_t")
+    duration = init_params.get("duration_sec")
+    if dt is None or duration is None:
+        raise ValueError("init_params.delta_t and init_params.duration_sec are required for time_dependence")
+    n_steps = int(duration // dt)
+    time_vec = np.zeros(n_steps)
+    onset = int(time_dependence.get("onset_time", 0) // dt)
+    offset = time_dependence.get("offset_time")
+    offset = None if offset is None else int(offset // dt)
+    time_vec[slice(onset, offset)] = 1
+    return time_vec
+
+
+def _build_perturbator(
+    rate_cfg: dict[str, Any],
+    *,
+    length: int,
+) -> VectorialPerturbation:
+    cfg = dict(rate_cfg)
+    vectors = cfg.pop("vectors", [])
+    cfg.pop("params", None)
+    cfg.pop("time_dependence", None)
+    seed = cfg.pop("seed", 256)
+    rng = np.random.default_rng(seed)
+    params = {
+        **cfg,
+        "rng": rng,
+        "length": length,
+    }
+    return VectorialPerturbation(*vectors, **params)
+
+
+def _build_rate_perturbation_factory(
+    sim_config: dict[str, Any],
+) -> tuple[callable, int]:
+    perturbation_cfg = sim_config.get("perturbation")
+    if not isinstance(perturbation_cfg, dict):
+        raise ValueError("Config missing perturbation block for rate sweep.")
+    rate_cfg = _select_rate_perturbation_cfg(perturbation_cfg)
+    vectors = rate_cfg.get("vectors", [])
+    if vectors:
+        length = len(vectors[0])
+    else:
+        length = _load_n_clusters(sim_config)
+    n_params = len(rate_cfg.get("params", [])) or len(vectors) or 1
+    perturbator = _build_perturbator(rate_cfg, length=length)
+    init_params = sim_config.get("init_params", {})
+    time_vec = _get_time_vector(rate_cfg, init_params)
+
+    def build_rate_perturbation(params: Iterable[float]) -> np.ndarray:
+        coeffs = np.asarray(list(params), dtype=float)
+        if coeffs.size != n_params:
+            raise ValueError(f"Expected {n_params} coefficients, got {coeffs.size}.")
+        if time_vec is not None:
+            coeffs = np.outer(coeffs, time_vec)
+        return perturbator.get_perturbation(*coeffs)
+
+    return build_rate_perturbation, n_params
+
+
+def _parse_params_grid(items: list[str] | None) -> list[list[float]]:
+    if not items:
+        return []
+    grid: list[list[float]] = []
+    for item in items:
+        parts = [p for p in item.split(",") if p != ""]
+        if not parts:
+            continue
+        grid.append([float(p) for p in parts])
+    return grid
 
 
 def create_processor_factory(dt: float = 0.5e-3):
@@ -198,19 +299,16 @@ def create_processor_factory(dt: float = 0.5e-3):
 
 def create_sweep_simulator_factory(
     config_path: Path,
-    rate_value: float,
+    rate_perturbation: np.ndarray,
     *,
-    n_clusters: int,
     raster_plots: bool,
     save_dir: Path,
 ):
-    rate_vec = np.full(n_clusters, float(rate_value), dtype=float)
-
     def factory(seed: int, **kwargs):
         stager = StageSNNSimulation(
             config_path,
             random_seed=seed,
-            rate_perturbation=rate_vec,
+            rate_perturbation=rate_perturbation,
         )
         if raster_plots:
             return _RasterPlotRunner(stager, seed, save_dir)
@@ -223,7 +321,8 @@ def _run_sweep_value(
     *,
     config_path: Path,
     save_dir: Path,
-    rate_value: float,
+    params: list[float],
+    rate_perturbation: np.ndarray,
     seeds: list[int] | None,
     args: argparse.Namespace,
     n_clusters: int,
@@ -234,8 +333,7 @@ def _run_sweep_value(
 
     simulator_factory = create_sweep_simulator_factory(
         config_path,
-        rate_value,
-        n_clusters=n_clusters,
+        rate_perturbation,
         raster_plots=args.raster_plots,
         save_dir=save_dir,
     )
@@ -295,7 +393,7 @@ def _run_sweep_value(
             shutil.rmtree(raw_data_dir)
 
     print(
-        f"Sweep value {rate_value}: completed in {result.duration_seconds:.2f}s."
+        f"Sweep params {params}: completed in {result.duration_seconds:.2f}s."
         f" Results at {save_dir}"
     )
 
@@ -316,14 +414,29 @@ def main() -> int:
             seeds = load_seeds_from_file(seeds_file)
             print(f"Loaded {len(seeds)} seeds from {seeds_file}")
 
-    n_clusters = _load_n_clusters(config_path)
+    sim_config = _load_sim_config(config_path)
+    n_clusters = _load_n_clusters(sim_config)
+    build_rate_perturbation, n_params = _build_rate_perturbation_factory(sim_config)
+    params_grid = _parse_params_grid(args.params_grid)
+    if params_grid:
+        if any(len(params) != n_params for params in params_grid):
+            raise SystemExit(f"Each --params-grid entry must have {n_params} values.")
+        sweep_params = params_grid
+    else:
+        if n_params != 1:
+            raise SystemExit(
+                f"Config expects {n_params} coefficients; use --params-grid."
+            )
+        sweep_params = [[value] for value in args.sweep_values]
 
-    for value in args.sweep_values:
-        sweep_dir = _format_sweep_dir(save_root, value)
+    for params in sweep_params:
+        rate_perturbation = build_rate_perturbation(params)
+        sweep_dir = _format_params_dir(save_root, params)
         _run_sweep_value(
             config_path=config_path,
             save_dir=sweep_dir,
-            rate_value=value,
+            params=params,
+            rate_perturbation=rate_perturbation,
             seeds=seeds,
             args=args,
             n_clusters=n_clusters,
