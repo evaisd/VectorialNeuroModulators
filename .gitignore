@@ -8,3 +8,5 @@ __pycache__/
 .ipynb_checkpoints/
 /pg.ipynb
 /.claude/
+/.venv/
+/.run/
