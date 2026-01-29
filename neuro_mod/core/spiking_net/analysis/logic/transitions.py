@@ -162,6 +162,8 @@ def get_transition_matrix_from_data(
     Args:
         attractors_data: Mapping of attractor identities to summaries.
         session_end_times: Optional list of session boundaries.
+        filter_by_size: filter attractors of certain sizes.
+
 
     Returns:
         Transition probability matrix (n_states, n_states).

@@ -1,67 +1,102 @@
-"""Base class for simulation data analyzers."""
+"""Analyzer base classes and registries for pipeline analysis."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Any
-import logging
+from typing import Any, Callable, ClassVar
 
 import pandas as pd
 
+from neuro_mod.analysis.helpers import *
 
-class _BaseAnalyzer(ABC):
-    """Base class for analyzing processed simulation data.
 
-    Subclasses implement analysis pipelines for specific simulation types,
-    loading processed data and computing metrics, transforming to DataFrames,
-    and providing various analysis utilities.
-    """
+class BaseAnalyzer(ABC):
+    """Base class for analyzers with manipulation/metric registry."""
 
-    def __init__(self, processed_data: dict | Path) -> None:
-        """Initialize the analyzer with processed data.
+    _manipulations: ClassVar[dict[str, Callable[..., pd.DataFrame]]] = {}
+    _readers: ClassVar[dict[str, Callable[..., pd.DataFrame]]] = {}
+    _metrics: ClassVar[dict[str, tuple[str | None, Callable[..., MetricResult]]]] = {}
 
-        Args:
-            processed_data: Either a dictionary of processed data or a Path
-                to a directory containing saved processed data.
-        """
-        self.logger = logging.getLogger(self.__class__.__name__)
-        if isinstance(processed_data, (str, Path)):
-            self._processed_data = self._load_from_path(Path(processed_data))
-        else:
-            self._processed_data = processed_data
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        cls._manipulations = dict(getattr(cls, "_manipulations", {}))
+        cls._metrics = dict(getattr(cls, "_metrics", {}))
+        cls._readers = dict(getattr(cls, "_readers", {}))
+        for _, value in cls.__dict__.items():
+            if callable(value) and getattr(value, "_is_manipulation", False):
+                name = getattr(value, "_manipulation_name", None) or value.__name__
+                cls._manipulations[name] = value
+            if callable(value) and getattr(value, "_is_reader", False):
+                name = getattr(value, "_reader_name", None) or value.__name__
+                cls._readers[name] = value
+            if callable(value) and getattr(value, "_is_metric", False):
+                name = getattr(value, "_metric_name", None) or value.__name__
+                expects = getattr(value, "_metric_expects", None)
+                cls._metrics[name] = (expects, value)
 
     @property
-    def processed_data(self) -> dict:
-        """Return the processed data dictionary."""
-        return self._processed_data
-
     @abstractmethod
-    def _load_from_path(self, path: Path) -> dict:
-        """Load processed data from a directory path.
+    def df(self) -> pd.DataFrame:
+        """Base occurrence-level DataFrame."""
+        ...
 
-        Args:
-            path: Directory containing saved processed data.
+    def manipulation(self, name: str, **kwargs: Any) -> pd.DataFrame:
+        """Call a registered manipulation by name."""
+        if name not in self._manipulations:
+            available = ", ".join(sorted(self._manipulations))
+            raise KeyError(f"Unknown manipulation '{name}'. Available: {available}")
+        func = self._manipulations[name]
+        return func(self, **kwargs)
 
-        Returns:
-            The processed data dictionary.
-        """
-        pass
+    def reader(self, name: str, **kwargs: Any) -> pd.DataFrame:
+        """Call a registered reader by name."""
+        if name not in self._readers:
+            available = ", ".join(sorted(self._readers))
+            raise KeyError(f"Unknown reader '{name}'. Available: {available}")
+        func = self._readers[name]
+        return func(self, **kwargs)
 
-    @abstractmethod
-    def to_dataframe(self) -> pd.DataFrame:
-        """Convert processed data to a pandas DataFrame.
+    def metric(
+        self,
+        name: str,
+        df: pd.DataFrame | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> MetricResult:
+        """Call a registered metric by name."""
+        if name not in self._metrics:
+            available = ", ".join(sorted(self._metrics))
+            raise KeyError(f"Unknown metric '{name}'. Available: {available}")
+        expects, func = self._metrics[name]
+        if df is None:
+            df = self.manipulation(expects) if expects else self.df
+        return func(self, df, *args, **kwargs)
 
-        Returns:
-            DataFrame representation of the processed data.
-        """
-        pass
+    @classmethod
+    def list_manipulations(cls) -> list[str]:
+        """List registered manipulation names."""
+        return sorted(cls._manipulations)
+
+    @classmethod
+    def list_metrics(cls) -> list[str]:
+        """List registered metric names."""
+        return sorted(cls._metrics)
+
+    @classmethod
+    def list_readers(cls) -> list[str]:
+        """List registered reader names."""
+        return sorted(cls._readers)
 
     @abstractmethod
     def get_summary_metrics(self) -> dict[str, Any]:
-        """Extract summary metrics from the processed data.
+        """Return a dictionary of summary metrics."""
+        ...
 
-        Returns:
-            Dictionary of metric names to values.
-        """
-        pass
+
+__all__ = [
+    "BaseAnalyzer",
+    "MetricResult",
+    "manipulation",
+    "metric",
+    "reader",
+]

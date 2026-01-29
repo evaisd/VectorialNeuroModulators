@@ -2,11 +2,28 @@
 
 from __future__ import annotations
 
+import json
+from typing import Any
+from pathlib import Path
+
 import numpy as np
 
 from neuro_mod.core.spiking_net.utils import get_session_end_times_s
-
 from neuro_mod.core.spiking_net.analysis.logic import time_window
+
+
+__all__ = [
+    "load_from_path",
+    "load_config",
+    "get_attractor_indices_in_order",
+    "can_use_loaded_attractors",
+    "get_attractor_identities_in_order",
+    "get_unique_attractor_first_start_times",
+    "get_session_end_times_s",
+    "can_use_loaded_attractors",
+    "build_attractor_map",
+    "filter_attractors_data_between",
+]
 
 
 def build_attractor_map(attractors_data: dict) -> dict:
@@ -144,3 +161,70 @@ def can_use_loaded_attractors(
     if set(kwargs.keys()) == {"minimal_time_ms"}:
         return kwargs["minimal_time_ms"] == minimal_life_span_ms
     return False
+
+
+def load_from_path(path: Path) -> dict:
+    """Load attractors_data from a directory.
+
+    Args:
+        path: Directory containing saved processed data.
+
+    Returns:
+        The attractors_data dictionary.
+    """
+    config_path = path / "processor_config.json"
+
+    if config_path.exists():
+        config = json.loads(config_path.read_text())
+        files = config.get("files", {})
+        attractors_filename = files.get("attractors", "attractors.npy")
+    else:
+        attractors_filename = "attractors.npy"
+
+    attractors_path = path / attractors_filename
+    data = np.load(attractors_path, allow_pickle=True).item()
+
+    return data
+
+
+def load_config(path: Path) -> dict:
+    """Load configuration from a directory.
+
+    Args:
+        path: Directory containing saved config.
+
+    Returns:
+        The configuration dictionary.
+    """
+    config_path = path / "processor_config.json"
+    batch_config_path = path / "batch_config.json"
+    config: dict[str, Any] = {}
+    if config_path.exists():
+        config = json.loads(config_path.read_text())
+    if batch_config_path.exists():
+        batch_config = json.loads(batch_config_path.read_text())
+        config.setdefault("batch", batch_config)
+        repeats = batch_config.get("repeats", [])
+        repeat_durations = [
+            repeat.get("duration_ms")
+            for repeat in repeats
+            if repeat.get("duration_ms") is not None
+        ]
+        config.setdefault("repeat_durations_ms", repeat_durations)
+        config.setdefault("n_runs", batch_config.get("n_runs"))
+    return config
+
+
+def get_attractor_indices_in_order(
+    attractors_data: dict,
+) -> list[Any]:
+    if not attractors_data:
+        return []
+    identities = [
+        identity
+        for identity, entry in sorted(
+            attractors_data.items(),
+            key=lambda item: item[1].get("idx", 0),
+        )
+    ]
+    return [attractors_data[identity].get("idx", identity) for identity in identities]
