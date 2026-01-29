@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any
@@ -226,6 +227,66 @@ class PipelineResult:
             "duration_seconds": self.duration_seconds,
             "aggregated_metrics": self.get_aggregated_metrics(),
         }
+
+    def align_transition_matrices(
+        self,
+        *,
+        labels: str = "identity",
+        canonical_labels: list[Any] | None = None,
+        include_aggregated: bool = False,
+    ) -> tuple[list[Any], dict[str, pd.DataFrame]]:
+        """Return transition matrices aligned to a canonical label set."""
+        from neuro_mod.core.spiking_net.analysis import helpers as snn_helpers
+
+        logger = logging.getLogger("PipelineResult")
+        tpms: dict[str, pd.DataFrame] = {}
+
+        for key, analyzer in self.analyzers.items():
+            if not include_aggregated and key == "aggregated":
+                continue
+            if hasattr(analyzer, "transitions_matrix"):
+                try:
+                    tpm = analyzer.transitions_matrix(labels=labels)
+                except TypeError:
+                    tpm = analyzer.transitions_matrix()
+                if isinstance(tpm, pd.DataFrame) and not tpm.empty:
+                    tpms[key] = tpm
+            elif hasattr(analyzer, "manipulation") and hasattr(analyzer, "list_manipulations"):
+                if labels != "idx":
+                    logger.warning(
+                        "Analyzer for '%s' does not support label selection; using idx labels.",
+                        key,
+                    )
+                if "transitions" in analyzer.list_manipulations():
+                    tpm = analyzer.manipulation("transitions")
+                    if isinstance(tpm, pd.DataFrame) and not tpm.empty:
+                        tpms[key] = tpm
+
+        if not tpms:
+            for name, df in self.dataframes.items():
+                if not name.endswith("_tpm"):
+                    continue
+                key = name[:-4]
+                if not include_aggregated and key == "aggregated":
+                    continue
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    tpms[key] = df
+            if tpms and labels != "idx":
+                logger.warning(
+                    "No analyzers available; using stored TPM labels (likely idx)."
+                )
+
+        if not tpms:
+            return [], {}
+
+        if canonical_labels is None:
+            canonical_labels = snn_helpers.build_canonical_labels_from_tpms(tpms.values())
+
+        aligned = {
+            key: snn_helpers.align_transition_matrix(tpm, canonical_labels)
+            for key, tpm in tpms.items()
+        }
+        return list(canonical_labels), aligned
 
 
 __all__ = [
