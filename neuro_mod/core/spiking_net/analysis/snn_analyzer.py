@@ -10,13 +10,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from neuro_mod.analysis.base_analyzer import _BaseAnalyzer
+from neuro_mod.analysis import BaseAnalyzer, MetricResult, manipulation, metric, reader
 from neuro_mod.core.spiking_net.analysis.logic import transitions
-from neuro_mod.core.spiking_net.analysis.logic import helpers
+from neuro_mod.core.spiking_net.analysis import helpers
 from neuro_mod.core.spiking_net.analysis.logic import time_window
 
 
-class SNNAnalyzer(_BaseAnalyzer):
+class SNNAnalyzer(BaseAnalyzer):
     """Analyze processed SNN attractor data to extract metrics.
 
     This class loads attractors_data (from SNNProcessor or file) and
@@ -26,7 +26,7 @@ class SNNAnalyzer(_BaseAnalyzer):
 
     def __init__(
             self,
-            processed_data: dict | Path,
+            processed_data: dict | Path | str,
             *,
             config: dict | None = None,
     ) -> None:
@@ -36,17 +36,19 @@ class SNNAnalyzer(_BaseAnalyzer):
             processed_data: Either attractors_data dict or path to saved data.
             config: Optional configuration dict (loaded from file if path given).
         """
-        super().__init__(processed_data)
-
         if isinstance(processed_data, (str, Path)):
             path = Path(processed_data)
             if config is None:
-                config = self._load_config(path)
+                config = helpers.load_config(path)
+            self._processed_data = helpers.load_from_path(path)
+        else:
+            self._processed_data = processed_data
 
         self._config = config or {}
         self._attractor_map: dict | None = None
         self._transition_matrix: np.ndarray | None = None
         self.processed_time_df = pd.DataFrame()
+        self._df: pd.DataFrame | None = None
 
         # Extract config values
         self.dt = self._config.get("dt", 0.5e-3)
@@ -56,65 +58,11 @@ class SNNAnalyzer(_BaseAnalyzer):
         self.repeat_durations_ms = self._config.get("repeat_durations_ms", [])
         self.n_runs = self._config.get("n_runs")
 
-    def _load_from_path(self, path: Path) -> dict:
-        """Load attractors_data from a directory.
 
-        Args:
-            path: Directory containing saved processed data.
-
-        Returns:
-            The attractors_data dictionary.
-        """
-        config_path = path / "processor_config.json"
-
-        if config_path.exists():
-            config = json.loads(config_path.read_text())
-            files = config.get("files", {})
-            attractors_filename = files.get("attractors", "attractors.npy")
-        else:
-            attractors_filename = "attractors.npy"
-
-        attractors_path = path / attractors_filename
-        data = np.load(attractors_path, allow_pickle=True).item()
-
-        # Handle legacy format with times in steps
-        unit = config.get("starts_ends_unit", "seconds") if config_path.exists() else "seconds"
-        if unit == "steps":
-            dt = config.get("dt", 0.5e-3) if config_path.exists() else 0.5e-3
-            data = helpers.convert_attractors_data_steps_to_seconds(data, dt)
-
-        return data
-
-    def _load_config(self, path: Path) -> dict:
-        """Load configuration from a directory.
-
-        Args:
-            path: Directory containing saved config.
-
-        Returns:
-            The configuration dictionary.
-        """
-        config_path = path / "processor_config.json"
-        batch_config_path = path / "batch_config.json"
-        config: dict[str, Any] = {}
-        if config_path.exists():
-            config = json.loads(config_path.read_text())
-        if batch_config_path.exists():
-            batch_config = json.loads(batch_config_path.read_text())
-            config.setdefault("batch", batch_config)
-            repeats = batch_config.get("repeats", [])
-            repeat_durations = [
-                repeat.get("duration_ms")
-                for repeat in repeats
-                if repeat.get("duration_ms") is not None
-            ]
-            config.setdefault("repeat_durations_ms", repeat_durations)
-            config.setdefault("n_runs", batch_config.get("n_runs"))
-        return config
-
-    def get_batch_config(self) -> dict[str, Any]:
-        """Return batch configuration metadata if available."""
-        return self._config.get("batch", {})
+    @property
+    def processed_data(self) -> dict:
+        """Return the processed data dictionary."""
+        return self._processed_data
 
     @property
     def attractors_data(self) -> dict:
@@ -128,7 +76,15 @@ class SNNAnalyzer(_BaseAnalyzer):
             self._attractor_map = helpers.build_attractor_map(self.attractors_data)
         return self._attractor_map
 
-    def to_dataframe(self) -> pd.DataFrame:
+    @property
+    def df(self) -> pd.DataFrame:
+        """Base occurrence-level DataFrame."""
+        if self._df is None:
+            self._df = self._build_dataframe()
+        return self._df
+
+    @reader("attractors_data")
+    def _build_dataframe(self) -> pd.DataFrame:
         """Convert attractors_data to a pandas DataFrame.
 
         Returns a DataFrame indexed by occurrences sorted by time, with columns:
@@ -233,9 +189,11 @@ class SNNAnalyzer(_BaseAnalyzer):
 
         return df
 
-    @staticmethod
-    def aggregate_per_attractor_df(df: pd.DataFrame) -> pd.DataFrame:
-        """Aggregate occurrence-level data into per-attractor summaries."""
+    # --- Manipulations ---
+
+    @manipulation("per_attractor")
+    def per_attractor(self) -> pd.DataFrame:
+        df = self.df
         if df.empty:
             return pd.DataFrame()
         agg = df.groupby("attractor_idx").agg(
@@ -250,9 +208,65 @@ class SNNAnalyzer(_BaseAnalyzer):
         agg["std_duration"] = agg["std_duration"].fillna(0)
         return agg
 
-    def get_per_attractor_dataframe(self) -> pd.DataFrame:
-        """Return per-attractor summary dataframe."""
-        return self.aggregate_per_attractor_df(self.to_dataframe())
+    @manipulation("transitions")
+    def transitions_matrix(
+        self,
+        *,
+        t_from: float | None = None,
+        t_to: float | None = None,
+    ) -> pd.DataFrame:
+        matrix = self.get_transition_matrix(t_from=t_from, t_to=t_to)
+        indices = self._get_attractor_indices_in_order(t_from=t_from, t_to=t_to)
+
+        if indices and matrix.shape[0] == len(indices):
+            df = pd.DataFrame(matrix, index=indices, columns=indices)
+            mapping = pd.Series(self.attractor_map).sort_values()
+            ordered = [idx for idx in mapping.index if idx in df.index]
+            if ordered and len(ordered) == df.shape[0]:
+                df = df.loc[ordered, ordered]
+            return df
+        return pd.DataFrame(matrix)
+
+    @manipulation("time_evolution")
+    def time_evolution(
+        self,
+        *,
+        dt: float | None = None,
+        num_steps: int | None = None,
+    ) -> pd.DataFrame:
+        return self.get_time_evolution_dataframe(dt=dt, num_steps=num_steps)
+
+    @manipulation("filtered")
+    def filtered(
+        self,
+        *,
+        t_from: float | None = None,
+        t_to: float | None = None,
+        min_duration: float | None = None,
+    ) -> pd.DataFrame:
+        df = self.df
+        if t_from is not None:
+            df = df[df["t_start"] >= t_from]
+        if t_to is not None:
+            df = df[df["t_end"] <= t_to]
+        if min_duration is not None:
+            df = df[df["duration"] >= min_duration]
+        return df.copy()
+
+    # --- Metrics ---
+
+    @metric("tpm_heatmap", expects="transitions")
+    def tpm_heatmap(self, df: pd.DataFrame) -> MetricResult:
+        metadata = {
+            "index": df.index.to_numpy(),
+            "columns": df.columns.to_numpy(),
+            "colorbar_label": "probability",
+        }
+        return MetricResult(
+            x=df.values,
+            y=np.array([]),
+            metadata=metadata
+        )
 
     def get_summary_metrics(self) -> dict[str, Any]:
         """Extract summary metrics from the attractors_data.
@@ -418,6 +432,7 @@ class SNNAnalyzer(_BaseAnalyzer):
             return np.array([]), np.array([])
         return self.get_mean_lifespan(*identities, t_from=t_from, t_to=t_to)
 
+
     def get_occurrences(
             self,
             t_from: float | None = None,
@@ -505,7 +520,7 @@ class SNNAnalyzer(_BaseAnalyzer):
 
         return transitions.get_transition_matrix_from_data(
             attractors_data,
-            session_end_times=session_end_times if session_end_times else None,
+            session_end_times if session_end_times else None,
         )
 
     def get_transition_prob(
@@ -580,7 +595,6 @@ class SNNAnalyzer(_BaseAnalyzer):
 
     # --- Time-evolution metrics ---
 
-    @lru_cache()
     def _get_unique_attractor_first_start_times(self) -> np.ndarray:
         """Get first start time for each unique attractor."""
         return helpers.get_unique_attractor_first_start_times(self.attractors_data)
@@ -601,47 +615,6 @@ class SNNAnalyzer(_BaseAnalyzer):
         if first_starts.size == 0:
             return 0
         return int(np.count_nonzero(first_starts <= time_s))
-
-    def get_transition_density_until_time(self, time_ms: float) -> float:
-        """Compute transition density up to a time threshold.
-
-        Args:
-            time_ms: Time threshold in milliseconds.
-
-        Returns:
-            Fraction of observed transitions among possible pairs.
-        """
-        if time_ms < 0:
-            raise ValueError("time_ms must be non-negative.")
-        time_s = time_ms / 1e3
-
-        times, labels = transitions.get_ordered_occurrences(self.attractors_data)
-        if times.size == 0:
-            return 0.0
-
-        session_end_times = self._get_session_end_times_s()
-        within_window = times < time_s
-        if not np.any(within_window):
-            return 0.0
-
-        times = times[within_window]
-        labels = labels[within_window]
-        if labels.size < 2:
-            return 0.0
-
-        pairs = transitions.get_transition_pairs(
-            times,
-            labels,
-            session_end_times=session_end_times if session_end_times else None,
-        )
-        if not pairs:
-            return 0.0
-
-        n_attractors = self.get_unique_attractors_count_until_time(time_ms)
-        total_entries = n_attractors * n_attractors
-        if total_entries == 0:
-            return 0.0
-        return len(pairs) / total_entries
 
     def get_transition_matrix_l2_norms_until_time(
             self,
@@ -785,3 +758,12 @@ class SNNAnalyzer(_BaseAnalyzer):
         if not self.session_lengths_steps:
             return []
         return helpers.get_session_end_times_s(self.session_lengths_steps, self.dt)
+
+    def _get_attractor_indices_in_order(
+        self,
+        t_from: float | None = None,
+        t_to: float | None = None,
+    ) -> list[Any]:
+        from neuro_mod.core.spiking_net.analysis.helpers import get_attractor_indices_in_order
+        data = self.get_attractors_data(t_from=t_from, t_to=t_to)
+        return get_attractor_indices_in_order(data)
