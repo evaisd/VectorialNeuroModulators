@@ -18,6 +18,7 @@ from typing import Any
 
 import numpy as np
 import yaml
+import matplotlib.pyplot as plt
 
 from neuro_mod.core.spiking_net.processing import SNNBatchProcessorFactory, SNNProcessor
 from neuro_mod.execution.helpers.cli import resolve_path, save_cmd
@@ -41,6 +42,11 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
         "--save-dir",
         default=str(root / "simulations/snn_rate_sweep"),
         help="Output directory for sweep artifacts.",
+    )
+    parser.add_argument(
+        "--style",
+        default=str(root / "style/neuroips.mplstyle"),
+        help="Matplotlib style name or path to a .mplstyle file.",
     )
     parser.add_argument(
         "--sweep-values",
@@ -123,6 +129,19 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
         help="Number of time steps for time evolution dataframe density.",
     )
     return parser
+
+
+def _apply_style(style: str, root: Path) -> None:
+    style_path = Path(style)
+    if not style_path.is_absolute():
+        style_path = root / style
+    try:
+        if style_path.exists():
+            plt.style.use(str(style_path))
+        else:
+            plt.style.use(style)
+    except OSError as exc:
+        print(f\"Warning: failed to apply style '{style}': {exc}\")
 
 
 class _RasterPlotRunner:
@@ -284,6 +303,8 @@ def _run_sweep_value(
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     args = _build_parser(root).parse_args()
+
+    _apply_style(args.style, root)
 
     config_path = resolve_path(root, args.config)
     save_root = resolve_path(root, args.save_dir)
