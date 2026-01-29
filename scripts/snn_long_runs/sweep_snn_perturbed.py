@@ -291,7 +291,7 @@ def _write_run_config(
     if not isinstance(perturbation_cfg, dict):
         raise ValueError("Config missing perturbation block for rate sweep.")
     rate_cfg, key_path = _select_rate_perturbation_cfg(perturbation_cfg)
-    rate_cfg["params"] = list(params)
+    rate_cfg["params"] = [float(value) for value in params]
     # write back in case rate_cfg was nested
     if key_path == ["perturbation", "rate"]:
         updated["perturbation"]["rate"] = rate_cfg
