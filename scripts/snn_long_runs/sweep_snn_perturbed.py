@@ -8,6 +8,12 @@ Example:
     --sweep-values -2 -1 0 1 2 \
     --n-repeats 20
 
+  python scripts/sweep_snn_perturbed.py \
+    --config configs/snn_long_run_perturbed.yaml \
+    --save-dir simulations/snn_rate_sweep \
+    --range 0.05 0.15 5 \
+    --n-repeats 10
+
   # Multi-vector coefficients
   python scripts/sweep_snn_perturbed.py \
     --config configs/snn_long_run_perturbed.yaml \
@@ -43,7 +49,7 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        default=str(root / "configs/snn_long_run.yaml"),
+        default=str(root / "configs/snn_long_run_perturbed.yaml"),
         help="Path to the YAML config file.",
     )
     parser.add_argument(
@@ -68,6 +74,13 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
         nargs="+",
         default=None,
         help="Comma-separated coefficient vectors for multi-vector sweeps (e.g. 0.1,0.2 0.2,0.1).",
+    )
+    sweep_group.add_argument(
+        "--range",
+        nargs=3,
+        type=float,
+        metavar=("LOW", "HIGH", "NUM"),
+        help="Generate evenly spaced coefficients for single-vector sweeps.",
     )
     parser.add_argument(
         "--n-repeats",
@@ -176,11 +189,8 @@ class _RasterPlotRunner:
         return outputs
 
 
-def _format_params_dir(base: Path, params: Iterable[float]) -> Path:
-    token = "_".join(
-        f"{value}".replace("-", "m").replace(".", "p") for value in params
-    )
-    return base / f"params_{token}"
+def _format_run_dir(base: Path, index: int) -> Path:
+    return base / f"run_{index}"
 
 
 def _load_sim_config(config_path: Path) -> dict[str, Any]:
@@ -399,7 +409,7 @@ def _run_sweep_value(
 
 
 def main() -> int:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     args = _build_parser(root).parse_args()
 
     _apply_style(args.style, root)
@@ -422,6 +432,16 @@ def main() -> int:
         if any(len(params) != n_params for params in params_grid):
             raise SystemExit(f"Each --params-grid entry must have {n_params} values.")
         sweep_params = params_grid
+    elif args.range is not None:
+        if n_params != 1:
+            raise SystemExit(
+                f"Config expects {n_params} coefficients; use --params-grid."
+            )
+        low, high, num = args.range
+        num_int = int(num)
+        if num_int <= 0:
+            raise SystemExit("Range NUM must be a positive integer.")
+        sweep_params = [[value] for value in np.linspace(low, high, num_int)]
     else:
         if n_params != 1:
             raise SystemExit(
@@ -429,9 +449,9 @@ def main() -> int:
             )
         sweep_params = [[value] for value in args.sweep_values]
 
-    for params in sweep_params:
+    for idx, params in enumerate(sweep_params):
         rate_perturbation = build_rate_perturbation(params)
-        sweep_dir = _format_params_dir(save_root, params)
+        sweep_dir = _format_run_dir(save_root, idx)
         _run_sweep_value(
             config_path=config_path,
             save_dir=sweep_dir,
