@@ -25,6 +25,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import copy
 import shutil
 from pathlib import Path
 from typing import Any, Iterable
@@ -208,10 +209,12 @@ def _load_n_clusters(sim_config: dict[str, Any]) -> int:
     return int(n_clusters)
 
 
-def _select_rate_perturbation_cfg(perturbation_cfg: dict[str, Any]) -> dict[str, Any]:
+def _select_rate_perturbation_cfg(
+    perturbation_cfg: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
     if "rate" in perturbation_cfg and isinstance(perturbation_cfg["rate"], dict):
-        return perturbation_cfg["rate"]
-    return perturbation_cfg
+        return perturbation_cfg["rate"], ["perturbation", "rate"]
+    return perturbation_cfg, ["perturbation"]
 
 
 def _get_time_vector(rate_cfg: dict[str, Any], init_params: dict[str, Any]) -> np.ndarray | None:
@@ -256,7 +259,7 @@ def _build_rate_perturbation_factory(
     perturbation_cfg = sim_config.get("perturbation")
     if not isinstance(perturbation_cfg, dict):
         raise ValueError("Config missing perturbation block for rate sweep.")
-    rate_cfg = _select_rate_perturbation_cfg(perturbation_cfg)
+    rate_cfg, _ = _select_rate_perturbation_cfg(perturbation_cfg)
     vectors = rate_cfg.get("vectors", [])
     if vectors:
         length = len(vectors[0])
@@ -276,6 +279,27 @@ def _build_rate_perturbation_factory(
         return perturbator.get_perturbation(*coeffs)
 
     return build_rate_perturbation, n_params
+
+
+def _write_run_config(
+    base_config: dict[str, Any],
+    params: list[float],
+    out_path: Path,
+) -> None:
+    updated = copy.deepcopy(base_config)
+    perturbation_cfg = updated.get("perturbation")
+    if not isinstance(perturbation_cfg, dict):
+        raise ValueError("Config missing perturbation block for rate sweep.")
+    rate_cfg, key_path = _select_rate_perturbation_cfg(perturbation_cfg)
+    rate_cfg["params"] = list(params)
+    # write back in case rate_cfg was nested
+    if key_path == ["perturbation", "rate"]:
+        updated["perturbation"]["rate"] = rate_cfg
+    else:
+        updated["perturbation"] = rate_cfg
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w") as f:
+        yaml.safe_dump(updated, f, sort_keys=False)
 
 
 def _parse_params_grid(items: list[str] | None) -> list[list[float]]:
@@ -330,6 +354,7 @@ def create_sweep_simulator_factory(
 def _run_sweep_value(
     *,
     config_path: Path,
+    sim_config: dict[str, Any],
     save_dir: Path,
     params: list[float],
     rate_perturbation: np.ndarray,
@@ -339,10 +364,11 @@ def _run_sweep_value(
 ) -> None:
     save_dir.mkdir(parents=True, exist_ok=True)
     save_cmd(save_dir / "metadata")
-    config_path.copy(save_dir / "metadata/config.yaml")
+    run_config_path = save_dir / "metadata" / "config.yaml"
+    _write_run_config(sim_config, params, run_config_path)
 
     simulator_factory = create_sweep_simulator_factory(
-        config_path,
+        run_config_path,
         rate_perturbation,
         raster_plots=args.raster_plots,
         save_dir=save_dir,
@@ -454,6 +480,7 @@ def main() -> int:
         sweep_dir = _format_run_dir(save_root, idx)
         _run_sweep_value(
             config_path=config_path,
+            sim_config=sim_config,
             save_dir=sweep_dir,
             params=params,
             rate_perturbation=rate_perturbation,
