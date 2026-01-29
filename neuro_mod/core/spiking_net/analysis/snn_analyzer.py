@@ -214,7 +214,7 @@ class SNNAnalyzer(BaseAnalyzer):
         *,
         t_from: float | None = None,
         t_to: float | None = None,
-        labels: str = "idx",
+        labels: str = "identity",
         canonical_labels: list[Any] | None = None,
     ) -> pd.DataFrame:
         matrix = self.get_transition_matrix(t_from=t_from, t_to=t_to)

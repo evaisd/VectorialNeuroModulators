@@ -986,9 +986,8 @@ class Pipeline(Generic[TRaw, TProcessed]):
             return
         if not aligned:
             return
-        result.dataframes["tpm_labels"] = pd.DataFrame({"label": canonical_labels})
         for key, tpm in aligned.items():
-            result.dataframes[f"{key}_tpm_aligned"] = tpm
+            result.dataframes[f"{key}_tpm"] = tpm
 
     def _save_results(self, config: PipelineConfig, result: PipelineResult) -> None:
         """Save pipeline results to disk."""
