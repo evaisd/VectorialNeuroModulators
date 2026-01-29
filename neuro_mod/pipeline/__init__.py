@@ -39,8 +39,10 @@ from neuro_mod.pipeline.plotting import (
     ComposablePlotter,
     MatplotlibPlotter,
     PlotSpec,
+    SpecPlotter,
     SeabornPlotter,
 )
+from neuro_mod.analysis.base_analyzer import BaseAnalyzer, MetricResult, manipulation, metric
 from neuro_mod.pipeline.protocols import (
     Analyzer,
     AnalyzerFactory,
@@ -67,8 +69,14 @@ __all__ = [
     "Plotter",
     # Plotters
     "BasePlotter",
+    "SpecPlotter",
     "SeabornPlotter",
     "PlotSpec",
     "ComposablePlotter",
     "MatplotlibPlotter",
+    # Analyzer base
+    "BaseAnalyzer",
+    "MetricResult",
+    "manipulation",
+    "metric",
 ]

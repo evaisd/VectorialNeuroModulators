@@ -173,6 +173,7 @@ class PipelineResult:
         processed_data: Processed data per run.
         dataframes: DataFrames per run, plus "aggregated" for combined data.
         metrics: Summary metrics per run, plus "aggregated" for combined metrics.
+        analyzers: Analyzer instances per run key (not serialized).
         figures: List of generated figure objects.
         seeds_used: Seeds used for each run (for reproducibility).
         sweep_metadata: Metadata about sweep parameters and values.
@@ -193,6 +194,7 @@ class PipelineResult:
     # Analysis results
     dataframes: dict[str, pd.DataFrame] = field(default_factory=dict)
     metrics: dict[str, dict[str, Any]] = field(default_factory=dict)
+    analyzers: dict[str, Any] = field(default_factory=dict)
 
     # Plotting artifacts
     figures: list[Any] = field(default_factory=list)

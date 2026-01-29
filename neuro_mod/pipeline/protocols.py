@@ -91,16 +91,20 @@ class Analyzer(Protocol[TProcessedData]):
     """Protocol for analysis components.
 
     Analyzes processed data and provides DataFrame conversion.
-    Examples: _BaseAnalyzer subclasses.
+    Examples: BaseAnalyzer subclasses.
     """
 
     @property
-    def processed_data(self) -> TProcessedData:
-        """Return the processed data dictionary."""
+    def df(self) -> pd.DataFrame:
+        """Return the base occurrence-level DataFrame."""
         ...
 
-    def to_dataframe(self, *columns: str) -> pd.DataFrame:
-        """Convert processed data to pandas DataFrame."""
+    def manipulation(self, name: str, **kwargs: Any) -> pd.DataFrame:
+        """Call a registered manipulation and return a DataFrame."""
+        ...
+
+    def metric(self, name: str, df: pd.DataFrame | None = None, **kwargs: Any) -> Any:
+        """Call a registered metric and return a result."""
         ...
 
     def get_summary_metrics(self) -> dict[str, Any]:
@@ -202,21 +206,19 @@ class BatchProcessorFactory(Protocol[TRawOutput, TProcessedData]):
 class Plotter(Protocol):
     """Protocol for plotting components.
 
-    Generates visualizations from DataFrames and metrics.
+    Generates visualizations from analyzers.
     """
 
     def plot(
         self,
-        data: pd.DataFrame,
-        metrics: dict[str, Any] | None = None,
+        analyzer: Analyzer,
         save_dir: Path | None = None,
         **kwargs: Any,
     ) -> list[Any]:
-        """Generate plots from DataFrame and metrics.
+        """Generate plots from an analyzer.
 
         Args:
-            data: DataFrame to visualize.
-            metrics: Optional summary metrics dictionary.
+            analyzer: Analyzer providing DataFrames and metrics.
             save_dir: Optional directory to save plot files.
             **kwargs: Additional plotting arguments.
 

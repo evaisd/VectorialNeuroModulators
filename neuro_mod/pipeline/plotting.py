@@ -7,11 +7,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import logging
 import matplotlib.figure as mfig
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
+from neuro_mod.analysis.base_analyzer import BaseAnalyzer, MetricResult
 
 # Lazy seaborn import
 _seaborn = None
@@ -30,25 +33,21 @@ def _get_seaborn():
 class PlotSpec:
     """Specification for a single plot.
 
-    Attributes:
-        name: Unique name for the plot (used as filename).
-        plot_type: Type of plot ("line", "scatter", "bar", "hist", "heatmap", "box", "violin", "strip", "point").
-        x: Column name for x-axis.
-        y: Column name for y-axis.
-        hue: Column name for color encoding.
-        style: Column name for line style encoding.
-        size: Column name for size encoding.
-        row: Column name for row faceting.
-        col: Column name for column faceting.
-        title: Plot title.
-        xlabel: X-axis label.
-        ylabel: Y-axis label.
-        figsize: Figure size (width, height) in inches.
-        kwargs: Additional kwargs passed to the seaborn plot function.
+    Core fields support analyzer-driven specs; legacy fields support DataFrame plotting.
     """
 
     name: str
-    plot_type: str
+    manipulation: str | None = None
+    metric: str | None = None
+    plot_type: str | None = None
+    title: str | None = None
+    xlabel: str | None = None
+    ylabel: str | None = None
+    manipulation_kwargs: dict[str, Any] = field(default_factory=dict)
+    metric_kwargs: dict[str, Any] = field(default_factory=dict)
+    plot_kwargs: dict[str, Any] = field(default_factory=dict)
+    figsize: tuple[float, float] = (7.0, 5.0)
+    # Legacy DataFrame plotting fields
     x: str | None = None
     y: str | None = None
     hue: str | None = None
@@ -56,11 +55,22 @@ class PlotSpec:
     size: str | None = None
     row: str | None = None
     col: str | None = None
-    title: str | None = None
-    xlabel: str | None = None
-    ylabel: str | None = None
-    figsize: tuple[float, float] | None = None
     kwargs: dict[str, Any] = field(default_factory=dict)
+
+    def resolved_plot_kwargs(self) -> dict[str, Any]:
+        if self.plot_kwargs and self.kwargs:
+            merged = dict(self.kwargs)
+            merged.update(self.plot_kwargs)
+            return merged
+        return self.plot_kwargs or self.kwargs
+
+
+def _resolve_dataframe(analyzer: BaseAnalyzer | pd.DataFrame) -> pd.DataFrame:
+    if isinstance(analyzer, pd.DataFrame):
+        return analyzer
+    if hasattr(analyzer, "df"):
+        return analyzer.df
+    raise TypeError("Expected analyzer with .df or a pandas DataFrame")
 
 
 class BasePlotter(ABC):
@@ -69,16 +79,14 @@ class BasePlotter(ABC):
     @abstractmethod
     def plot(
         self,
-        data: pd.DataFrame,
-        metrics: dict[str, Any] | None = None,
+        analyzer: BaseAnalyzer,
         save_dir: Path | None = None,
         **kwargs: Any,
     ) -> list[mfig.Figure]:
-        """Generate plots from data.
+        """Generate plots from an analyzer.
 
         Args:
-            data: DataFrame to visualize.
-            metrics: Optional summary metrics.
+            analyzer: Analyzer providing DataFrames and metrics.
             save_dir: Optional directory to save plots.
             **kwargs: Additional plotting arguments.
 
@@ -88,22 +96,106 @@ class BasePlotter(ABC):
         ...
 
 
+class SpecPlotter(BasePlotter):
+    """Spec-driven plotter for analyzers."""
+
+    def __init__(self, specs: list[PlotSpec]) -> None:
+        self.specs = specs
+
+    def plot(
+        self,
+        analyzer: BaseAnalyzer,
+        save_dir: Path | None = None,
+        **kwargs: Any,
+    ) -> list[mfig.Figure]:
+        figures: list[mfig.Figure] = []
+
+        if isinstance(analyzer, pd.DataFrame):
+            raise TypeError("SpecPlotter requires an analyzer, not a DataFrame")
+
+        if save_dir:
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+        for spec in self.specs:
+            fig = self._create_spec_plot(analyzer, spec)
+            figures.append(fig)
+            if save_dir:
+                fig.savefig(save_dir / f"{spec.name}.png", dpi=300, bbox_inches="tight")
+                plt.close(fig)
+
+        return figures
+
+    def _create_spec_plot(self, analyzer: BaseAnalyzer, spec: PlotSpec) -> mfig.Figure:
+        if spec.plot_type is None:
+            raise ValueError(f"PlotSpec '{spec.name}' missing plot_type")
+        if spec.metric is None:
+            raise ValueError(f"PlotSpec '{spec.name}' missing metric")
+
+        df = None
+        if spec.manipulation:
+            df = analyzer.manipulation(spec.manipulation, **spec.manipulation_kwargs)
+        result = analyzer.metric(spec.metric, df=df, **spec.metric_kwargs)
+        fig, ax = plt.subplots(figsize=spec.figsize)
+        plot_kwargs = dict(spec.resolved_plot_kwargs())
+
+        self._render_plot(ax, spec.plot_type, result, plot_kwargs)
+
+        if spec.title:
+            ax.set_title(spec.title)
+        if spec.xlabel:
+            ax.set_xlabel(spec.xlabel)
+        if spec.ylabel:
+            ax.set_ylabel(spec.ylabel)
+
+        return fig
+
+    def _render_plot(
+        self,
+        ax: plt.Axes,
+        plot_type: str,
+        result: MetricResult,
+        plot_kwargs: dict[str, Any],
+    ) -> None:
+        if plot_type == "scatter":
+            ax.scatter(result.x, result.y, **plot_kwargs)
+        elif plot_type == "line":
+            ax.plot(result.x, result.y, **plot_kwargs)
+        elif plot_type == "hist":
+            ax.hist(result.x, **plot_kwargs)
+        elif plot_type == "bar":
+            ax.bar(result.x, result.y, **plot_kwargs)
+        elif plot_type == "heatmap":
+            if result.x.size == 0:
+                ax.text(0.5, 0.5, "No data", ha="center", va="center")
+                ax.set_axis_off()
+                return
+            cmap = plot_kwargs.pop("cmap", "magma")
+            log_transform = plot_kwargs.pop("log_transform", False)
+            log_eps = plot_kwargs.pop("log_eps", 1e-6)
+            cbar_override = plot_kwargs.pop("colorbar_label", None)
+            data = result.x
+            if log_transform:
+                data = np.log10(data + log_eps)
+            im = ax.imshow(data, cmap=cmap, aspect="auto", **plot_kwargs)
+            metadata = result.metadata or {}
+            index_labels = metadata.get("index")
+            column_labels = metadata.get("columns")
+            if index_labels is not None and len(index_labels) <= 20:
+                ax.set_yticks(np.arange(len(index_labels)))
+                ax.set_yticklabels(index_labels)
+            if column_labels is not None and len(column_labels) <= 20:
+                ax.set_xticks(np.arange(len(column_labels)))
+                ax.set_xticklabels(column_labels, rotation=90)
+            cbar_label = cbar_override or metadata.get("colorbar_label")
+            plt.colorbar(im, ax=ax, label=cbar_label)
+        else:
+            raise ValueError(f"Unsupported plot_type '{plot_type}'")
+
+
 class SeabornPlotter(BasePlotter):
     """Seaborn-based plotter with journal_style integration.
 
-    Provides both automatic plotting based on data structure
-    and manual plot specification via PlotSpec.
-
-    Example:
-        >>> plotter = SeabornPlotter()
-        >>> figures = plotter.plot(df, save_dir=Path("plots"))
-
-        >>> # With custom specs
-        >>> specs = [
-        ...     PlotSpec(name="scatter", plot_type="scatter", x="t_start", y="duration", hue="group"),
-        ...     PlotSpec(name="hist", plot_type="hist", x="duration"),
-        ... ]
-        >>> plotter = SeabornPlotter(specs=specs)
+    Uses analyzer manipulations/metrics to build plots from MetricResult.
     """
 
     def __init__(
@@ -119,12 +211,11 @@ class SeabornPlotter(BasePlotter):
             specs: Optional list of plot specifications.
             apply_journal_style: Whether to apply journal_style defaults.
             default_alpha: Alpha value for plots.
-            auto_generate: Whether to auto-generate plots if no specs provided.
+            auto_generate: Unused (kept for API compatibility).
         """
         self.specs = specs or []
         self.apply_journal_style = apply_journal_style
         self.default_alpha = default_alpha
-        self.auto_generate = auto_generate
 
         if apply_journal_style:
             try:
@@ -135,120 +226,63 @@ class SeabornPlotter(BasePlotter):
 
     def plot(
         self,
-        data: pd.DataFrame,
-        metrics: dict[str, Any] | None = None,
+        analyzer: BaseAnalyzer,
         save_dir: Path | None = None,
         **kwargs: Any,
     ) -> list[mfig.Figure]:
-        """Generate plots from DataFrame.
+        """Generate plots from analyzer metrics."""
+        if isinstance(analyzer, pd.DataFrame):
+            raise TypeError("SeabornPlotter requires an analyzer, not a DataFrame")
 
-        Args:
-            data: DataFrame to plot.
-            metrics: Optional summary metrics.
-            save_dir: Optional directory to save plots.
-            **kwargs: Additional plotting arguments.
-
-        Returns:
-            List of matplotlib Figure objects.
-        """
         sns = _get_seaborn()
         figures: list[mfig.Figure] = []
 
         if save_dir:
             save_dir.mkdir(parents=True, exist_ok=True)
 
-        # Use provided specs or auto-generate
-        specs = self.specs if self.specs else (
-            self._auto_generate_specs(data) if self.auto_generate else []
-        )
+        if not self.specs:
+            logging.getLogger("SeabornPlotter").warning("No plot specs provided.")
+            return figures
 
-        for spec in specs:
+        for spec in self.specs:
             try:
-                fig = self._create_plot(data, spec, sns)
+                fig = self._create_metric_plot(analyzer, spec, sns)
                 figures.append(fig)
 
                 if save_dir:
                     fig.savefig(save_dir / f"{spec.name}.png", dpi=300, bbox_inches="tight")
                     plt.close(fig)
             except Exception as e:
-                # Log but don't fail on individual plot errors
-                import logging
                 logging.getLogger("SeabornPlotter").warning(
                     f"Failed to create plot '{spec.name}': {e}"
                 )
 
         return figures
 
-    def _auto_generate_specs(self, data: pd.DataFrame) -> list[PlotSpec]:
-        """Auto-generate plot specifications based on data structure."""
-        specs: list[PlotSpec] = []
-
-        # Detect column types
-        numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
-        # Remove index-like columns
-        numeric_cols = [c for c in numeric_cols if c not in ("repeat", "sweep_idx")]
-
-        # Check for common grouping columns
-        has_sweep = "sweep_value" in data.columns
-        has_repeat = "repeat" in data.columns
-
-        # Generate appropriate plots based on structure
-        if has_sweep and numeric_cols:
-            # Line plot showing metric vs sweep value
-            for y_col in numeric_cols[:3]:
-                specs.append(PlotSpec(
-                    name=f"sweep_{y_col}",
-                    plot_type="line",
-                    x="sweep_value",
-                    y=y_col,
-                    hue="repeat" if has_repeat else None,
-                    title=f"{y_col} vs Sweep Parameter",
-                    kwargs={"errorbar": "sd" if has_repeat else None, "marker": "o"},
-                ))
-
-        if has_repeat and numeric_cols:
-            # Box plots showing distribution across repeats
-            for y_col in numeric_cols[:2]:
-                if has_sweep:
-                    specs.append(PlotSpec(
-                        name=f"box_{y_col}",
-                        plot_type="box",
-                        x="sweep_value",
-                        y=y_col,
-                        title=f"Distribution of {y_col}",
-                    ))
-                else:
-                    specs.append(PlotSpec(
-                        name=f"hist_{y_col}",
-                        plot_type="hist",
-                        x=y_col,
-                        title=f"Distribution of {y_col}",
-                        kwargs={"bins": 30, "kde": True},
-                    ))
-
-        # If no grouping columns, generate simple histograms
-        if not has_sweep and not has_repeat and numeric_cols:
-            for y_col in numeric_cols[:3]:
-                specs.append(PlotSpec(
-                    name=f"hist_{y_col}",
-                    plot_type="hist",
-                    x=y_col,
-                    title=f"Distribution of {y_col}",
-                    kwargs={"bins": 30, "kde": True},
-                ))
-
-        return specs
-
-    def _create_plot(
+    def _create_metric_plot(
         self,
-        data: pd.DataFrame,
+        analyzer: BaseAnalyzer,
         spec: PlotSpec,
         sns: Any,
     ) -> mfig.Figure:
-        """Create a single plot from specification."""
-        figsize = spec.figsize or (7, 5)
+        """Create a single plot from analyzer-driven metric results."""
+        if spec.plot_type is None:
+            raise ValueError(f"PlotSpec '{spec.name}' missing plot_type")
+        if spec.metric is None:
+            raise ValueError(f"PlotSpec '{spec.name}' missing metric")
 
-        # Map plot types to seaborn functions
+        df = (
+            analyzer.manipulation(spec.manipulation, **spec.manipulation_kwargs)
+            if spec.manipulation
+            else analyzer.df
+        )
+        result = analyzer.metric(spec.metric, df=df, **spec.metric_kwargs)
+
+        fig, ax = plt.subplots(figsize=spec.figsize or (7, 5))
+        plot_kwargs = dict(spec.resolved_plot_kwargs())
+        xscale = plot_kwargs.pop("xscale", None)
+        yscale = plot_kwargs.pop("yscale", None)
+
         plot_funcs = {
             "line": sns.lineplot,
             "scatter": sns.scatterplot,
@@ -261,93 +295,158 @@ class SeabornPlotter(BasePlotter):
             "point": sns.pointplot,
             "kde": sns.kdeplot,
         }
-
         plot_func = plot_funcs.get(spec.plot_type)
         if plot_func is None:
             raise ValueError(f"Unknown plot type: {spec.plot_type}")
 
-        # Handle faceting separately
-        if spec.row or spec.col:
-            return self._create_faceted_plot(data, spec, sns, plot_func)
-
-        # Create single figure
-        fig, ax = plt.subplots(figsize=figsize)
-
-        # Build kwargs
-        plot_kwargs: dict[str, Any] = {
-            "data": data,
-            "ax": ax,
-            **spec.kwargs,
-        }
-
-        # Add optional parameters
-        for param in ["x", "y", "hue", "style", "size"]:
-            value = getattr(spec, param)
-            if value is not None:
-                plot_kwargs[param] = value
-
-        # Special handling for heatmap (no x, y, hue)
         if spec.plot_type == "heatmap":
-            plot_kwargs.pop("x", None)
-            plot_kwargs.pop("y", None)
-            plot_kwargs.pop("hue", None)
-            plot_kwargs.pop("style", None)
-            plot_kwargs.pop("size", None)
-        elif spec.plot_type == "line":
-            import matplotlib as mpl
-            plot_kwargs.setdefault("alpha", self.default_alpha)
-            plot_kwargs.setdefault("linewidth", mpl.rcParams["lines.linewidth"] * 3)
+            if result.x.size == 0:
+                ax.text(0.5, 0.5, "No data", ha="center", va="center")
+                ax.set_axis_off()
+                return fig
+            plot_func(result.x, ax=ax, **plot_kwargs)
+            metadata = result.metadata or {}
+            index_labels = metadata.get("index")
+            column_labels = metadata.get("columns")
+            if index_labels is not None and len(index_labels) <= 20:
+                ax.set_yticklabels(index_labels, rotation=0)
+            if column_labels is not None and len(column_labels) <= 20:
+                ax.set_xticklabels(column_labels, rotation=90)
+            cbar_label = metadata.get("colorbar_label")
+            if cbar_label and ax.collections and ax.collections[0].colorbar:
+                ax.collections[0].colorbar.set_label(cbar_label)
+        else:
+            df_metric, x_col, y_col, hue_col, size_col = self._metric_to_dataframe(result, spec)
+            plot_kwargs["data"] = df_metric
+            plot_kwargs["ax"] = ax
+            if spec.plot_type in {"line", "scatter", "bar", "box", "violin", "strip", "point"}:
+                if y_col is None:
+                    raise ValueError(
+                        f"PlotSpec '{spec.name}' requires y values for '{spec.plot_type}'"
+                    )
+                plot_kwargs["x"] = x_col
+                plot_kwargs["y"] = y_col
+            elif spec.plot_type in {"hist", "kde"}:
+                plot_kwargs["x"] = x_col
+            if hue_col:
+                plot_kwargs["hue"] = hue_col
+            if size_col and spec.plot_type == "scatter":
+                plot_kwargs["size"] = size_col
+                plot_kwargs.pop("s", None)
+            if spec.plot_type != "scatter":
+                plot_kwargs.pop("s", None)
+            legend_mode = plot_kwargs.pop("legend_mode", None)
+            if legend_mode == "hue":
+                plot_kwargs["legend"] = False
+            errorbar_kwargs = plot_kwargs.pop("errorbar_kwargs", None)
+            plot_func(**plot_kwargs)
+            if legend_mode == "hue" and hue_col:
+                self._add_hue_legend(
+                    ax,
+                    df_metric[hue_col],
+                    plot_kwargs.get("palette"),
+                    (result.metadata or {}).get("legend_title") or hue_col,
+                    plot_type=spec.plot_type,
+                    linewidth=plot_kwargs.get("linewidth"),
+                )
+            self._apply_error_bars(ax, result, errorbar_kwargs, plot_kwargs)
 
-        plot_func(**plot_kwargs)
-
-        # Apply labels
         if spec.title:
             ax.set_title(spec.title)
         if spec.xlabel:
             ax.set_xlabel(spec.xlabel)
         if spec.ylabel:
             ax.set_ylabel(spec.ylabel)
+        if xscale:
+            ax.set_xscale(xscale)
+        if yscale:
+            ax.set_yscale(yscale)
 
         return fig
 
-    def _create_faceted_plot(
+    def _metric_to_dataframe(
         self,
-        data: pd.DataFrame,
+        result: MetricResult,
         spec: PlotSpec,
-        sns: Any,
-        plot_func: Any,
-    ) -> mfig.Figure:
-        """Create a faceted plot using FacetGrid."""
-        facet_kwargs = spec.kwargs.pop("facet_kwargs", {})
+    ) -> tuple[pd.DataFrame, str, str | None, str | None, str | None]:
+        x_name = spec.x or "x"
+        y_name = spec.y or "y"
+        hue_name = spec.hue or "label"
+        size_name = spec.size
 
-        g = sns.FacetGrid(
-            data,
-            row=spec.row,
-            col=spec.col,
-            **facet_kwargs,
-        )
+        data: dict[str, Any] = {x_name: result.x}
+        if result.y is not None and result.y.size:
+            data[y_name] = result.y
+        if result.labels is not None:
+            data[hue_name] = result.labels
+        if size_name:
+            metadata = result.metadata or {}
+            if size_name in metadata:
+                data[size_name] = metadata[size_name]
 
-        # Build map kwargs
-        map_kwargs: dict[str, Any] = {}
-        for param in ["x", "y", "hue", "style", "size"]:
-            value = getattr(spec, param)
-            if value is not None:
-                map_kwargs[param] = value
+        df = pd.DataFrame(data)
+        y_col = y_name if y_name in df.columns else None
+        hue_col = hue_name if hue_name in df.columns else None
+        size_col = size_name if size_name in df.columns else None
+        return df, x_name, y_col, hue_col, size_col
 
-        map_kwargs.update(spec.kwargs)
+    def _add_hue_legend(
+        self,
+        ax: plt.Axes,
+        hue_values: pd.Series,
+        palette: str | list[str] | None,
+        title: str | None,
+        *,
+        plot_type: str,
+        linewidth: float | None,
+    ) -> None:
+        values = hue_values.dropna().unique()
+        if values.size == 0:
+            return
+        if np.issubdtype(values.dtype, np.number):
+            values = np.sort(values)
+        n_colors = len(values)
+        colors = _get_seaborn().color_palette(palette, n_colors=n_colors)
 
-        if spec.plot_type == "line":
-            import matplotlib as mpl
-            map_kwargs.setdefault("alpha", self.default_alpha)
-            map_kwargs.setdefault("linewidth", mpl.rcParams["lines.linewidth"] * 3)
+        handles = []
+        labels = [str(v) for v in values]
+        for color in colors:
+            if plot_type == "line":
+                handles.append(Line2D([0], [0], color=color, lw=linewidth or 2.0))
+            else:
+                handles.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        marker="o",
+                        color="none",
+                        markerfacecolor=color,
+                        markersize=6,
+                    )
+                )
+        ax.legend(handles, labels, title=title)
 
-        g.map_dataframe(plot_func, **map_kwargs)
-        g.add_legend()
-
-        if spec.title:
-            g.figure.suptitle(spec.title, y=1.02)
-
-        return g.figure
+    def _apply_error_bars(
+        self,
+        ax: plt.Axes,
+        result: MetricResult,
+        errorbar_kwargs: dict[str, Any] | None,
+        plot_kwargs: dict[str, Any],
+    ) -> None:
+        metadata = result.metadata or {}
+        yerr = metadata.get("yerr")
+        xerr = metadata.get("xerr")
+        if yerr is None and xerr is None:
+            return
+        if result.y is None or result.y.size == 0:
+            return
+        err_kwargs = dict(errorbar_kwargs or {})
+        err_kwargs.setdefault("fmt", "none")
+        err_kwargs.setdefault("alpha", plot_kwargs.get("alpha", self.default_alpha))
+        color = plot_kwargs.get("color")
+        if color and "ecolor" not in err_kwargs:
+            err_kwargs["ecolor"] = color
+        ax.errorbar(result.x, result.y, xerr=xerr, yerr=yerr, **err_kwargs)
 
 
 class ComposablePlotter(BasePlotter):
@@ -363,16 +462,14 @@ class ComposablePlotter(BasePlotter):
 
     def plot(
         self,
-        data: pd.DataFrame,
-        metrics: dict[str, Any] | None = None,
+        analyzer: BaseAnalyzer,
         save_dir: Path | None = None,
         **kwargs: Any,
     ) -> list[mfig.Figure]:
         """Generate plots from all composed plotters.
 
         Args:
-            data: DataFrame to visualize.
-            metrics: Optional summary metrics.
+            analyzer: Analyzer to visualize.
             save_dir: Optional directory to save plots.
             **kwargs: Additional plotting arguments.
 
@@ -380,8 +477,14 @@ class ComposablePlotter(BasePlotter):
             Combined list of Figure objects from all plotters.
         """
         figures: list[mfig.Figure] = []
+        is_dataframe = isinstance(analyzer, pd.DataFrame)
         for plotter in self.plotters:
-            figures.extend(plotter.plot(data, metrics, save_dir, **kwargs))
+            if is_dataframe and isinstance(plotter, (SpecPlotter, SeabornPlotter)):
+                logging.getLogger("ComposablePlotter").warning(
+                    "Skipping analyzer-only plotter because analyzer is a DataFrame"
+                )
+                continue
+            figures.extend(plotter.plot(analyzer, save_dir, **kwargs))
         return figures
 
 
@@ -415,16 +518,14 @@ class MatplotlibPlotter(BasePlotter):
 
     def plot(
         self,
-        data: pd.DataFrame,
-        metrics: dict[str, Any] | None = None,
+        analyzer: BaseAnalyzer,
         save_dir: Path | None = None,
         **kwargs: Any,
     ) -> list[mfig.Figure]:
         """Generate plots using custom matplotlib functions.
 
         Args:
-            data: DataFrame to visualize.
-            metrics: Optional summary metrics.
+            analyzer: Analyzer providing the base DataFrame.
             save_dir: Optional directory to save plots.
             **kwargs: Additional plotting arguments.
 
@@ -432,6 +533,12 @@ class MatplotlibPlotter(BasePlotter):
             List of matplotlib Figure objects.
         """
         figures: list[mfig.Figure] = []
+        metrics = kwargs.pop("metrics", None) or {}
+        if isinstance(analyzer, pd.DataFrame):
+            data = analyzer
+        else:
+            data = _resolve_dataframe(analyzer)
+            metrics = analyzer.get_summary_metrics()
 
         if save_dir:
             save_dir.mkdir(parents=True, exist_ok=True)
@@ -451,6 +558,7 @@ class MatplotlibPlotter(BasePlotter):
 __all__ = [
     "PlotSpec",
     "BasePlotter",
+    "SpecPlotter",
     "SeabornPlotter",
     "ComposablePlotter",
     "MatplotlibPlotter",

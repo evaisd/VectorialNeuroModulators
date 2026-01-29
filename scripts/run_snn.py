@@ -18,19 +18,15 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import seaborn as sns
 
 from neuro_mod.pipeline import (
-    BasePlotter,
     ComposablePlotter,
     ExecutionMode,
     Pipeline,
     PipelineConfig,
-    SeabornPlotter,
     PlotSpec,
+    SeabornPlotter,
+    SpecPlotter,
 )
 from neuro_mod.core.spiking_net.analysis import SNNAnalyzer
 from neuro_mod.core.spiking_net.processing import (
@@ -42,7 +38,8 @@ import yaml
 from neuro_mod.execution.stagers import StageSNNSimulation
 from neuro_mod.execution.helpers.cli import resolve_path, save_cmd
 from neuro_mod.visualization import folder_plots_to_pdf
-
+from neuro_mod.analysis import MetricResult, metric, manipulation
+import pandas as pd
 
 def _build_parser(root: Path) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -203,389 +200,316 @@ def create_processor_factory(dt: float = 0.5e-3):
 # =============================================================================
 
 COLORS = {
-    "primary": "#2a9d8f",
-    "secondary": "#e76f51",
-    "tertiary": "#264653",
-    "accent": "#f4a261",
-    "neutral": "#6c757d",
-    "bar": "#2a6f97",
-    "scatter": "#8d99ae",
+    "primary": "#0072b2",
+    "secondary": "#e69f00",
+    "tertiary": "#009e73",
+    "accent": "#d55e00",
+    "neutral": "#f0e442",
+    "bar": "#56b4e9",
+    "scatter": "#cc79a7",
 }
 
 
 # =============================================================================
-# Seaborn-based Plots (occurrence-level)
+# Spec-driven Plotter Factory
 # =============================================================================
 
 
-def create_occurrence_plotter() -> SeabornPlotter:
-    """Create a SeabornPlotter for occurrence-level plots."""
+class _ExpSNNAnalyzer(SNNAnalyzer):
+
+    @manipulation("num_clusters")
+    def agg_by_num_clusters(self) -> pd.DataFrame:
+        df = self.per_attractor()
+        agg = df.groupby('num_clusters').agg(
+            total_occurrences=("occurrences", "sum"),
+            mean_duration=("mean_duration", "mean"),
+            std_duration=("std_duration", "mean"),
+            first_start=("first_start", "count"),
+        ).loc[1:]
+        return agg
+
+    @metric("01_occurrences_vs_lifespan_scatter", expects="per_attractor")
+    def occ_vs_life(self, df: pd.DataFrame) -> MetricResult:
+        return MetricResult(
+            x=df["occurrences"].to_numpy(),
+            y=df["mean_duration"].to_numpy(),
+            labels=df["num_clusters"].to_numpy(),
+            metadata={"std_duration": df["std_duration"].to_numpy()},
+        )
+
+    @metric("02_occurrence_duration_hist")
+    def occ_duration(self, df: pd.DataFrame) -> MetricResult:
+        return MetricResult(
+            x=df["duration"].to_numpy(),
+            y=None,
+        )
+
+    @metric("03_size_vs_occurrence_violin", expects="per_attractor")
+    def size_vs_occurrence(self, df: pd.DataFrame) -> MetricResult:
+        return MetricResult(
+            x=df["num_clusters"].to_numpy(),
+            y=df["occurrences"].to_numpy(),
+        )
+
+    @metric("04_size_vs_lifespan_violin", expects="per_attractor")
+    def size_vs_lifespan(self, df: pd.DataFrame) -> MetricResult:
+        return MetricResult(
+            x=df["num_clusters"].to_numpy(),
+            y=df["mean_duration"].to_numpy(),
+        )
+
+    @metric("05_lifespan_distribution_hist", expects="per_attractor")
+    def lifespan_distribution(self, df: pd.DataFrame) -> MetricResult:
+        return MetricResult(
+            x=df["mean_duration"],
+            y=None
+        )
+
+    @metric("06_mean_lifespan_by_size_bar", expects="num_clusters")
+    def mean_lifespan_by_size(self, df: pd.DataFrame) -> MetricResult:
+        return MetricResult(
+            x=df.reset_index()['num_clusters'].to_numpy(),
+            y=df["mean_duration"].to_numpy(),
+        )
+
+    @metric("07_discovery_by_num_clusters_line", expects="per_attractor")
+    def discovery_by_num_clusters(
+            self,
+            df: pd.DataFrame,
+            *,
+            total_clusters: int = 18,
+            skip_zero: bool = True,
+    ) -> MetricResult:
+        from math import comb
+        import numpy as np
+        total_duration_s = self.total_duration_ms / 1e3
+        if total_duration_s == 0 and not df.empty:
+            total_duration_s = float(df["last_end"].max())
+
+        xs, ys, labels = [], [], []
+        for k, g in sorted(df.groupby("num_clusters")):
+            if skip_zero and k == 0:
+                continue
+            g = g.sort_values("first_start")
+            x = g["first_start"].to_numpy() / total_duration_s
+            y = (np.arange(len(g)) + 1) / comb(total_clusters, k)
+            xs.append(x)
+            ys.append(y)
+            labels.append(np.full_like(x, k, dtype=int))
+
+        if not xs:
+            return MetricResult(x=np.array([]), y=np.array([]))
+
+        return MetricResult(
+            x=np.concatenate(xs),
+            y=np.concatenate(ys),
+            labels=np.concatenate(labels),
+            metadata={"legend_title": "# clusters", "reference_line": ((0, 1), (1, 1))},
+        )
+
+    @metric("08_discovery_rate_line", expects="time_evolution")
+    def discovery_rate(
+        self,
+        df: pd.DataFrame,
+        *,
+        time_unit: str = "ms",
+    ) -> MetricResult:
+        times = df["time_ms"].to_numpy()
+        if time_unit == "s":
+            times = times / 1e3
+        elif time_unit == "min":
+            times = times / 6e4
+        return MetricResult(
+            x=times,
+            y=df["discovery_rate_per_s"].to_numpy(),
+            metadata={"time_unit": time_unit},
+        )
+
+    @metric("09_cumulative_attractors_line", expects="time_evolution")
+    def cumulative_attractors(
+        self,
+        df: pd.DataFrame,
+        *,
+        time_unit: str = "ms",
+    ) -> MetricResult:
+        times = df["time_ms"].to_numpy()
+        if time_unit == "s":
+            times = times / 1e3
+        elif time_unit == "min":
+            times = times / 6e4
+        return MetricResult(
+            x=times,
+            y=df["unique_attractors_count"].to_numpy(),
+            metadata={"time_unit": time_unit},
+        )
+
+    @metric("10_tpm_L2_norm_vs_time_line", expects="time_evolution")
+    def tpm_l2_norm_vs_time(
+            self,
+            df: pd.DataFrame,
+            *,
+            time_unit: str = "ms"
+    ) -> MetricResult:
+        times = df["time_ms"].to_numpy()
+        if time_unit == "s":
+            times = times / 1e3
+        elif time_unit == "min":
+            times = times / 6e4
+        return MetricResult(
+            x=times,
+            y=df["transition_l2_norm"].to_numpy(),
+        )
+
+def create_plotter(
+    *,
+    time_dt_ms: float | None,
+    time_steps: int | None,
+) -> ComposablePlotter:
+    """Create plotters for analyzer-driven plots."""
+    time_kwargs: dict[str, Any] = {}
+    if time_dt_ms is not None:
+        time_kwargs["dt"] = time_dt_ms / 1e3
+    elif time_steps is not None:
+        time_kwargs["num_steps"] = time_steps
+
     specs = [
         PlotSpec(
-            name="01_duration_distribution",
+            name="transition_heatmap",
+            manipulation="transitions",
+            metric="tpm_heatmap",
+            plot_type="heatmap",
+            title="Transition Probability Matrix",
+            xlabel="To (attractor idx)",
+            ylabel="From (attractor idx)",
+            plot_kwargs={
+                "cmap": "magma",
+                "log_transform": True,
+                "log_eps": 1e-6,
+                "colorbar_label": "log10(prob + 1e-6)",
+            },
+        ),
+    ]
+
+    seaborn_specs = [
+        PlotSpec(
+            name="duration_hist",
+            metric="02_occurrence_duration_hist",
             plot_type="hist",
-            x="duration",
             title="Occurrence Duration Distribution",
             xlabel="Duration (ms)",
             ylabel="Count",
-            kwargs={"bins": 40, "kde": True, "color": COLORS["primary"]},
+            plot_kwargs={"bins": 40, "alpha": 0.7, "color": COLORS["primary"]},
         ),
         PlotSpec(
-            name="02_duration_over_time",
+            name="lifespan_scatter",
+            manipulation="per_attractor",
+            metric="01_occurrences_vs_lifespan_scatter",
+            hue="labels",
+            size="std_duration",
             plot_type="scatter",
-            x="t_start",
-            y="duration",
-            hue="num_clusters",
-            title="Occurrence Duration Over Time",
-            xlabel="Start Time (s)",
-            ylabel="Duration (ms)",
-            kwargs={"alpha": 0.4, "s": 12, "palette": "viridis"},
+            title="Mean Attractor Lifespan vs Occurrences",
+            xlabel="Occurrences",
+            ylabel="Mean lifespan (ms)",
+            plot_kwargs={
+                "alpha": 0.5,
+                "palette": "tab10",
+                "sizes": (20, 160),
+                "legend_mode": "hue",
+                "xscale": "log",
+            },
+        ),
+        PlotSpec(
+            name="size_vs_occurrence_violin",
+            manipulation="per_attractor",
+            metric="03_size_vs_occurrence_violin",
+            plot_type="violin",
+            title="Attractor Size vs Occurrences",
+            xlabel="Attractor size (cluster count)",
+            ylabel="Occurrences",
+            plot_kwargs={"alpha": 0.6, "s": 18, "color": COLORS["primary"]},
+        ),
+        PlotSpec(
+            name="size_vs_lifespan_violin",
+            manipulation="per_attractor",
+            metric="04_size_vs_lifespan_violin",
+            plot_type="violin",
+            title="Attractor Size vs Mean Lifespan",
+            xlabel="Attractor size (cluster count)",
+            ylabel="Mean lifespan (ms)",
+            plot_kwargs={"alpha": 0.6, "s": 18, "color": COLORS["accent"]},
+        ),
+        PlotSpec(
+            name="lifespan_distribution_hist",
+            manipulation="per_attractor",
+            metric="05_lifespan_distribution_hist",
+            plot_type="hist",
+            title="Mean Lifespan Distribution (per attractor)",
+            xlabel="Mean lifespan (ms)",
+            ylabel="Count",
+            plot_kwargs={"bins": 40, "alpha": 0.7, "color": COLORS["scatter"]},
+        ),
+        PlotSpec(
+            name="mean_lifespan_by_size_bar",
+            manipulation="num_clusters",
+            metric="06_mean_lifespan_by_size_bar",
+            plot_type="bar",
+            title="Mean Lifespan by Attractor Size",
+            xlabel="Attractor size (cluster count)",
+            ylabel="Mean lifespan (ms)",
+            plot_kwargs={"color": COLORS["tertiary"], "alpha": 0.7},
+        ),
+        PlotSpec(
+            name="discovery_by_num_clusters_line",
+            manipulation="per_attractor",
+            metric="07_discovery_by_num_clusters_line",
+            plot_type="line",
+            hue="label",
+            title="Discovery by Number of Clusters",
+            xlabel="time / total sim duration",
+            ylabel="# attractors discovered as share of total",
+            plot_kwargs={"alpha": 0.5, "linewidth": 5.0, "palette": "tab10"},
+        ),
+        PlotSpec(
+            name="discovery_rate_line",
+            manipulation="time_evolution",
+            metric="08_discovery_rate_line",
+            plot_type="line",
+            title="Attractor Discovery Rate",
+            xlabel="Time (min)",
+            ylabel="New attractors per second",
+            manipulation_kwargs=time_kwargs,
+            metric_kwargs={"time_unit": "min"},
+            plot_kwargs={"color": COLORS["primary"], "linewidth": 5, "alpha": 0.5},
+        ),
+        PlotSpec(
+            name="cumulative_attractors",
+            manipulation="time_evolution",
+            metric="09_cumulative_attractors_line",
+            plot_type="line",
+            title="Cumulative Attractors (per second)",
+            xlabel="Time (min)",
+            ylabel="Attractors per second",
+            manipulation_kwargs=time_kwargs,
+            metric_kwargs={"time_unit": "min"},
+            plot_kwargs={"color": COLORS["secondary"], "linewidth": 5, "alpha": 0.5},
+        ),
+        PlotSpec(
+            name="transition_l2_norm_line",
+            manipulation="time_evolution",
+            metric="10_tpm_L2_norm_vs_time_line",
+            plot_type="line",
+            title="Transition Matrix L2 Norm Over Time",
+            xlabel="Time (min)",
+            ylabel="L2 norm",
+            manipulation_kwargs=time_kwargs,
+            metric_kwargs={"time_unit": "min"},
+            plot_kwargs={"color": COLORS["tertiary"], "linewidth": 5, "alpha": 0.5},
         ),
     ]
-    return SeabornPlotter(specs=specs, apply_journal_style=True)
 
-
-class NamedMatplotlibPlotter(BasePlotter):
-    """Matplotlib plotter that saves figures with explicit names."""
-
-    def __init__(
-        self,
-        plot_specs: list[tuple[str, Any, tuple[float, float] | None]],
-        apply_journal_style: bool = True,
-    ) -> None:
-        self.plot_specs = plot_specs
-        if apply_journal_style:
-            try:
-                from neuro_mod.visualization import journal_style
-                journal_style.apply_journal_style()
-            except ImportError:
-                pass
-
-    def plot(
-        self,
-        data: pd.DataFrame,
-        metrics: dict[str, Any] | None = None,
-        save_dir: Path | None = None,
-        **kwargs: Any,
-    ) -> list[Any]:
-        figures: list[Any] = []
-        if save_dir:
-            save_dir.mkdir(parents=True, exist_ok=True)
-
-        for name, plot_fn, figsize in self.plot_specs:
-            fig, ax = plt.subplots(figsize=figsize)
-            maybe_fig = plot_fn(data, ax, metrics=metrics, **kwargs)
-            fig_to_save = maybe_fig if hasattr(maybe_fig, "savefig") else fig
-            if fig_to_save is not fig:
-                plt.close(fig)
-            figures.append(fig_to_save)
-            if save_dir:
-                fig_to_save.savefig(save_dir / f"{name}.png", dpi=150, bbox_inches="tight")
-                plt.close(fig_to_save)
-        return figures
-
-
-def _get_per_attractor_df(
-    data: pd.DataFrame,
-    per_attractor_df: pd.DataFrame | None,
-) -> pd.DataFrame:
-    if per_attractor_df is not None and not per_attractor_df.empty:
-        return per_attractor_df
-    return SNNAnalyzer.aggregate_per_attractor_df(data)
-
-
-def plot_lifespan_vs_occurrences(
-    data: pd.DataFrame,
-    ax,
-    **kwargs: Any,
-) -> None:
-    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
-    if agg.empty:
-        return
-    unique_sizes = sorted(agg["num_clusters"].unique())
-    cmap = plt.get_cmap("tab20", max(len(unique_sizes), 1))
-    for i, size in enumerate(unique_sizes):
-        mask = agg["num_clusters"] == size
-        ax.scatter(
-            agg.loc[mask, "occurrences"],
-            agg.loc[mask, "mean_duration"],
-            s=18,
-            color=cmap(i),
-            alpha=0.7,
-            label=str(size),
-        )
-    ax.set_xscale("log")
-    ax.set_xlabel("Occurrences (log scale)")
-    ax.set_ylabel("Mean lifespan (ms)")
-    ax.set_title("Mean Attractor Lifespan vs Occurrences")
-    ax.legend(
-        title="Clusters",
-        ncol=1,
-        frameon=False,
-        fontsize=7,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-    )
-
-
-def plot_size_correlations(
-    data: pd.DataFrame,
-    ax,
-    **kwargs: Any,
-):
-    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
-    if agg.empty:
-        return None
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-    sizes = agg["num_clusters"].values
-    occurrences = agg["occurrences"].values
-    mean_lifespan = agg["mean_duration"].values
-    unique_sizes_arr = np.unique(sizes)
-    mean_occ_by_size = [np.mean(occurrences[sizes == s]) for s in unique_sizes_arr]
-    mean_life_by_size = [np.mean(mean_lifespan[sizes == s]) for s in unique_sizes_arr]
-
-    axes[0].scatter(sizes, occurrences, s=16, alpha=0.4, color=COLORS["primary"])
-    axes[0].plot(unique_sizes_arr, mean_occ_by_size, color="#1f6f5b", linewidth=2, marker="o", markersize=4)
-    axes[0].set_yscale("log")
-    axes[0].set_xlabel("Attractor size (cluster count)")
-    axes[0].set_ylabel("Occurrences (log scale)")
-    axes[0].set_title("Size vs Occurrences")
-
-    axes[1].scatter(sizes, mean_lifespan, s=16, alpha=0.4, color=COLORS["accent"])
-    axes[1].plot(unique_sizes_arr, mean_life_by_size, color="#c26d3b", linewidth=2, marker="o", markersize=4)
-    axes[1].set_xlabel("Attractor size (cluster count)")
-    axes[1].set_ylabel("Mean lifespan (ms)")
-    axes[1].set_title("Size vs Mean Lifespan")
-
-    fig.suptitle("Attractor Size Correlations", fontsize=12, fontweight="bold")
-    return fig
-
-
-def plot_mean_lifespan_histogram(
-    data: pd.DataFrame,
-    ax,
-    **kwargs: Any,
-) -> None:
-    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
-    if agg.empty:
-        return
-    sns.histplot(
-        agg["mean_duration"],
-        bins=40,
-        kde=True,
-        color=COLORS["scatter"],
-        edgecolor="white",
-        ax=ax,
-    )
-    ax.set_xlabel("Mean lifespan (ms)")
-    ax.set_ylabel("Count")
-    ax.set_title("Mean Lifespan Distribution (per attractor)")
-
-
-def plot_mean_lifespan_by_size(
-    data: pd.DataFrame,
-    ax,
-    **kwargs: Any,
-) -> None:
-    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
-    if agg.empty:
-        return
-    size_summary = agg.groupby("num_clusters").agg(
-        mean_lifespan=("mean_duration", "mean"),
-        sem_lifespan=("mean_duration", "sem"),
-    ).reset_index()
-    ax.bar(
-        size_summary["num_clusters"],
-        size_summary["mean_lifespan"],
-        yerr=size_summary["sem_lifespan"],
-        color=COLORS["tertiary"],
-        capsize=3,
-        edgecolor="white",
-    )
-    ax.set_xlabel("Attractor size (cluster count)")
-    ax.set_ylabel("Mean lifespan (ms)")
-    ax.set_title("Mean Lifespan by Attractor Size")
-
-
-def plot_top_attractors(
-    data: pd.DataFrame,
-    ax,
-    **kwargs: Any,
-) -> None:
-    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
-    if agg.empty:
-        return
-    top = agg.nlargest(20, "total_duration")
-    labels = [f"A{idx}" for idx in top["attractor_idx"]]
-    ax.bar(labels, top["total_duration"], color=COLORS["bar"], edgecolor="white")
-    ax.set_ylabel("Total duration (ms)")
-    ax.set_title("Top Attractors by Total Occupancy")
-    ax.tick_params(axis="x", rotation=45)
-
-
-def plot_transition_heatmap(
-    data: pd.DataFrame,
-    ax,
-    **kwargs: Any,
-) -> None:
-    tpm_df = kwargs.get("tpm_df")
-    if tpm_df is not None and not tpm_df.empty:
-        # Use the full transition matrix from the analyzer
-        tpm = tpm_df.values
-        log_probs = np.log10(tpm + 1e-6)
-        im = ax.imshow(log_probs, cmap="magma", aspect="auto")
-        ax.set_xlabel("To (attractor idx)")
-        ax.set_ylabel("From (attractor idx)")
-        ax.set_title("Transition Probability Matrix")
-        plt.colorbar(im, ax=ax, label="log10(prob + 1e-6)")
-        return
-
-    # Fallback: compute from occurrence data
-    if "prev_attractor_idx" not in data.columns:
-        return
-    df = data.dropna(subset=["prev_attractor_idx"]).copy()
-    if df.empty:
-        return
-    df["prev_attractor_idx"] = df["prev_attractor_idx"].astype(int)
-    trans_counts = pd.crosstab(
-        df["prev_attractor_idx"],
-        df["attractor_idx"],
-        dropna=False,
-    )
-    row_sums = trans_counts.sum(axis=1)
-    trans_probs = trans_counts.div(row_sums, axis=0).fillna(0)
-    log_probs = np.log10(trans_probs.values + 1e-6)
-
-    im = ax.imshow(log_probs, cmap="magma", aspect="auto")
-    ax.set_xlabel("To (attractor idx)")
-    ax.set_ylabel("From (attractor idx)")
-    ax.set_title("Transition Probability Matrix")
-    plt.colorbar(im, ax=ax, label="log10(prob + 1e-6)")
-
-
-def plot_discovery_by_num_of_clusters(
-    data: pd.DataFrame,
-    ax,
-    **kwargs: Any,
-) -> None:
-    from math import comb
-    lw = 5
-    alpha = 0.5
-    agg = _get_per_attractor_df(data, kwargs.get("per_attractor_df"))
-    for k, g in sorted(agg.groupby("num_clusters")):
-        if k == 0:
-            continue  # skip baseline if desired
-
-        x = g.first_start / agg.last_end.max()
-        y = (np.arange(len(g)) + 1) / comb(18, k)
-
-        ax.plot(x, y, label=str(k), linewidth=lw, alpha=alpha)
-
-    ax.axline((0, 1), (1, 1), linestyle=":", color="k", linewidth=2, alpha=0.5)
-    ax.set_xlabel("time / total sim duration")
-    ax.set_ylabel("# attractors discovered as share of total")
-    ax.legend(title="# clusters")
-    ax.set_title("Discovery by number of attractors")
-
-
-def create_aggregated_plotter() -> NamedMatplotlibPlotter:
-    """Create a plotter for aggregated attractor plots."""
-    return NamedMatplotlibPlotter(
-        plot_specs=[
-            ("03_lifespan_vs_occurrences", plot_lifespan_vs_occurrences, (8, 5)),
-            ("04_size_correlations", plot_size_correlations, None),
-            ("05_mean_lifespan_histogram", plot_mean_lifespan_histogram, (7, 5)),
-            ("06_mean_lifespan_by_size", plot_mean_lifespan_by_size, (7, 5)),
-            ("07_top_attractors", plot_top_attractors, (10, 5)),
-            ("08_transition_heatmap", plot_transition_heatmap, (8, 7)),
-            ("09_discovery_by_num_clusters", plot_discovery_by_num_of_clusters, (8, 5))
-        ],
-        apply_journal_style=True,
-    )
-
-
-class TimeEvolutionPlotter(BasePlotter):
-    """Plot time evolution data when provided via kwargs."""
-
-    def __init__(self) -> None:
-        self._plotter = SeabornPlotter(
-            specs=[
-                PlotSpec(
-                    name="10_discovery_rate",
-                    plot_type="line",
-                    x="time_min",
-                    y="discovery_rate_per_s",
-                    title="Attractor Discovery Rate",
-                    xlabel="Time (min)",
-                    ylabel="New attractors per second",
-                    kwargs={"color": COLORS["primary"], "linewidth": 3, "alpha":.5},
-                ),
-                PlotSpec(
-                    name="11_transition_l2_norm",
-                    plot_type="line",
-                    x="time_min",
-                    y="transition_l2_norm",
-                    title="Transition Matrix L2 Norm Over Time",
-                    xlabel="Time (min)",
-                    ylabel="L2 norm",
-                    kwargs={"color": COLORS["secondary"], "linewidth": 3, "alpha":.5},
-                ),
-                PlotSpec(
-                    name="12_unique_attractors",
-                    plot_type="line",
-                    x="time_min",
-                    y="unique_attractors_count",
-                    title="Cumulative Unique Attractors",
-                    xlabel="Time (min)",
-                    ylabel="Unique attractors",
-                    kwargs={"color": COLORS["tertiary"], "linewidth": 3, "alpha":.5},
-                ),
-                PlotSpec(
-                    name="13_l2_norm_vs_discovery_rate",
-                    plot_type="scatter",
-                    x="discovery_rate_per_s",
-                    y="transition_l2_norm",
-                    title="Transition L2 Norm vs Discovery Rate",
-                    xlabel="Discovery rate (attractors/s)",
-                    ylabel="L2 norm",
-                    kwargs={"color": COLORS["accent"], "alpha": 0.6, "s": 20},
-                ),
-            ],
-            apply_journal_style=True,
-        )
-
-    def plot(
-        self,
-        data: pd.DataFrame,
-        metrics: dict[str, Any] | None = None,
-        save_dir: Path | None = None,
-        **kwargs: Any,
-    ) -> list[Any]:
-        time_df = kwargs.get("time_df")
-        if time_df is None or time_df.empty:
-            return []
-        # Convert time from ms to minutes
-        time_df = time_df.copy()
-        time_df["time_min"] = time_df["time_ms"] / 60000.0
-        return self._plotter.plot(time_df, metrics=metrics, save_dir=save_dir)
-
-
-def create_time_plotter() -> BasePlotter:
-    """Create a plotter for time-evolution plots."""
-    return TimeEvolutionPlotter()
-
-
-# =============================================================================
-# Combined Plotter Factory
-# =============================================================================
-
-
-def create_plotter() -> BasePlotter:
-    """Create a combined plotter for all pipeline plots."""
     return ComposablePlotter([
-        create_occurrence_plotter(),
-        create_aggregated_plotter(),
-        create_time_plotter(),
+        SpecPlotter(specs),
+        SeabornPlotter(specs=seaborn_specs, apply_journal_style=True),
     ])
 
 
@@ -646,6 +570,7 @@ def main() -> int:
 
     # Save command for reproducibility
     save_cmd(save_dir / "metadata")
+    config_path.copy(save_dir / "metadata/config.yaml")
 
     # Load explicit seeds if provided
     seeds = None
@@ -670,14 +595,17 @@ def main() -> int:
     batch_processor_factory = SNNBatchProcessorFactory(
         clustering_params={"n_excitatory_clusters": n_excitatory_clusters},
     )
-    plotter = None if args.no_plots else create_plotter()
+    plotter = None if args.no_plots else create_plotter(
+        time_dt_ms=args.time_dt_ms,
+        time_steps=args.time_steps,
+    )
 
     # Create pipeline
     pipeline = Pipeline(
         simulator_factory=simulator_factory,
         processor_factory=processor_factory,
         batch_processor_factory=batch_processor_factory,
-        analyzer_factory=SNNAnalyzer,
+        analyzer_factory=_ExpSNNAnalyzer,
         plotter=plotter,
     )
 

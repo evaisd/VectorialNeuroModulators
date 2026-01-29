@@ -15,6 +15,7 @@ import pandas as pd
 
 from neuro_mod.pipeline.config import ExecutionMode, PipelineConfig, PipelineResult
 from neuro_mod.pipeline.io import get_git_commit, get_timestamp, save_result
+from neuro_mod.pipeline.plotting import SeabornPlotter, SpecPlotter
 from neuro_mod.pipeline.protocols import (
     AnalyzerFactory,
     BatchProcessorFactory,
@@ -153,7 +154,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
         )
         result.seeds_used = [m.get("seed") for m in metadata]
 
-        self._process_and_analyze_unified(
+        analyzer = self._process_and_analyze_unified(
             config,
             result,
             raw_refs,
@@ -163,7 +164,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
         )
 
         if config.run_plotting:
-            self._generate_plots(config, result, key)
+            self._generate_plots(config, result, key, analyzer)
 
         result.duration_seconds = time.time() - start_time
         self.logger.info(f"Processing complete in {result.duration_seconds:.2f}s")
@@ -307,10 +308,10 @@ class Pipeline(Generic[TRaw, TProcessed]):
         self.logger.info(f"Running single simulation (seed={seed})")
         raw = self._simulate(seed, config)
         raw = self._persist_raw_output(raw, config, "single")
-        self._process_and_analyze(config, result, raw, key="single")
+        analyzer = self._process_and_analyze(config, result, raw, key="single")
 
         if config.run_plotting:
-            self._generate_plots(config, result, "single")
+            self._generate_plots(config, result, "single", analyzer)
 
     def _run_repeated(
         self,
@@ -371,13 +372,13 @@ class Pipeline(Generic[TRaw, TProcessed]):
         # Phase 2: Unified batch processing (processor loads from disk)
         self.logger.info("Starting unified batch processing (loading from disk)")
         self._log_memory_usage(config, "Before unified processing")
-        self._process_and_analyze_unified(
+        analyzer = self._process_and_analyze_unified(
             config, result, raw_refs, metadata, key="aggregated"
         )
         self._log_memory_usage(config, "After unified processing")
 
         if config.run_plotting:
-            self._generate_plots(config, result, "aggregated")
+            self._generate_plots(config, result, "aggregated", analyzer)
 
     def _simulate_repeated_parallel(
         self,
@@ -445,12 +446,13 @@ class Pipeline(Generic[TRaw, TProcessed]):
             raw = self._simulate_with_param(seed, config, config.sweep_param, value)
             raw = self._persist_raw_output(raw, config, f"sweep_{i}")
             raw = self._minimize_raw_output(raw)
-            self._process_and_analyze(config, result, raw, key=f"sweep_{i}")
+            analyzer = self._process_and_analyze(config, result, raw, key=f"sweep_{i}")
+            if config.run_plotting:
+                self._generate_plots(config, result, f"sweep_{i}", analyzer)
 
         self._aggregate_sweep_results(config, result)
-
         if config.run_plotting:
-            self._generate_plots(config, result, "aggregated")
+            self._generate_plots(config, result, "aggregated", None)
 
     def _run_sweep_repeated(
         self,
@@ -530,7 +532,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
         for i, value in enumerate(config.sweep_values):
             self.logger.info(f"Processing sweep {i + 1}/{n_values} ({config.sweep_param}={value})")
             self._log_memory_usage(config, f"Before processing sweep {i + 1}")
-            self._process_and_analyze_unified(
+            analyzer = self._process_and_analyze_unified(
                 config, result,
                 raw_refs_by_sweep[i],
                 meta_by_sweep[i],
@@ -538,12 +540,13 @@ class Pipeline(Generic[TRaw, TProcessed]):
                 sweep_value=value,
             )
             self._log_memory_usage(config, f"After processing sweep {i + 1}")
+            if config.run_plotting:
+                self._generate_plots(config, result, f"sweep_{i}", analyzer)
 
         # Phase 3: Aggregate across sweep values
         self._aggregate_sweep_repeated_results(config, result)
-
         if config.run_plotting:
-            self._generate_plots(config, result, "aggregated")
+            self._generate_plots(config, result, "aggregated", None)
 
     def _simulate(self, seed: int, config: PipelineConfig) -> TRaw:
         """Run simulation with given seed."""
@@ -635,7 +638,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
         result: PipelineResult,
         raw: TRaw,
         key: str,
-    ) -> None:
+    ) -> Any | None:
         """Run processing and analysis phases for single runs.
 
         Used for SINGLE and SWEEP modes where each run is processed independently.
@@ -659,7 +662,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
         else:
             result.processed_data[key] = processed
 
-        self._analyze_and_store(config, result, processed, processor, key)
+        return self._analyze_and_store(config, result, processed, processor, key)
 
     def _analyze_and_store(
         self,
@@ -670,16 +673,16 @@ class Pipeline(Generic[TRaw, TProcessed]):
         key: str,
         *,
         sweep_value: Any = None,
-    ) -> None:
+    ) -> Any | None:
         """Run analysis and persist outputs."""
         if not (config.run_analysis and self.analyzer_factory is not None):
-            return
+            return None
         if processed is None:
-            return
+            return None
 
         self.logger.debug(f"Analyzing {key}")
         analyzer = self._build_analyzer(processed, processor)
-        df = analyzer.to_dataframe()
+        df = analyzer.df
         metrics = analyzer.get_summary_metrics()
 
         if sweep_value is not None and "sweep_value" not in df.columns:
@@ -688,25 +691,48 @@ class Pipeline(Generic[TRaw, TProcessed]):
         result.dataframes[key] = df
         result.metrics[key] = metrics
 
-        if hasattr(analyzer, "get_per_attractor_dataframe"):
-            per_attr_df = analyzer.get_per_attractor_dataframe()
-            if not per_attr_df.empty:
-                result.dataframes[f"{key}_per_attractor"] = per_attr_df
+        if hasattr(result, "analyzers"):
+            result.analyzers[key] = analyzer
 
-            if hasattr(analyzer, "get_time_evolution_dataframe"):
-                time_df = analyzer.get_time_evolution_dataframe(
+        if hasattr(analyzer, "list_manipulations"):
+            manipulations = set(analyzer.list_manipulations())
+            if "per_attractor" in manipulations:
+                per_attr_df = analyzer.manipulation("per_attractor")
+                if not per_attr_df.empty:
+                    result.dataframes[f"{key}_per_attractor"] = per_attr_df
+            if "time_evolution" in manipulations:
+                time_df = analyzer.manipulation(
+                    "time_evolution",
                     dt=config.time_evolution_dt,
                     num_steps=config.time_evolution_num_steps,
                 )
                 if not time_df.empty:
                     result.dataframes[f"{key}_time"] = time_df
+            if "transitions" in manipulations:
+                tpm = analyzer.manipulation("transitions")
+                if not tpm.empty:
+                    result.dataframes[f"{key}_tpm"] = tpm
+        else:
+            if hasattr(analyzer, "get_per_attractor_dataframe"):
+                per_attr_df = analyzer.get_per_attractor_dataframe()
+                if not per_attr_df.empty:
+                    result.dataframes[f"{key}_per_attractor"] = per_attr_df
 
-        if hasattr(analyzer, "get_transition_matrix"):
-            tpm = pd.DataFrame(analyzer.get_transition_matrix())
-            if not tpm.empty:
-                result.dataframes[f"{key}_tpm"] = tpm
+                if hasattr(analyzer, "get_time_evolution_dataframe"):
+                    time_df = analyzer.get_time_evolution_dataframe(
+                        dt=config.time_evolution_dt,
+                        num_steps=config.time_evolution_num_steps,
+                    )
+                    if not time_df.empty:
+                        result.dataframes[f"{key}_time"] = time_df
+
+            if hasattr(analyzer, "get_transition_matrix"):
+                tpm = pd.DataFrame(analyzer.get_transition_matrix())
+                if not tpm.empty:
+                    result.dataframes[f"{key}_tpm"] = tpm
 
         self._save_analysis_artifacts(config, result, key)
+        return analyzer
 
     def _supports_batch_processing(self) -> bool:
         """Check if the pipeline supports batch processing.
@@ -727,7 +753,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
         metadata: list[dict[str, Any]],
         key: str,
         sweep_value: Any = None,
-    ) -> None:
+    ) -> Any | None:
         """Process and analyze all runs together for consistent attractor IDs.
 
         The batch processor loads raw data from disk using the file paths in raw_refs,
@@ -766,7 +792,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
                 batch_processor.save(config.save_dir / "processed")
 
         # Analysis phase
-        self._analyze_and_store(
+        return self._analyze_and_store(
             config,
             result,
             processed,
@@ -911,32 +937,36 @@ class Pipeline(Generic[TRaw, TProcessed]):
         config: PipelineConfig,
         result: PipelineResult,
         key: str,
+        analyzer: Any | None,
     ) -> None:
         """Generate plots using the Plotter."""
         if self.plotter is None:
             self.logger.debug("No plotter configured, skipping plot generation")
             return
 
-        if key not in result.dataframes:
-            self.logger.warning(f"No DataFrame for key '{key}', skipping plots")
-            return
+        if analyzer is None and hasattr(result, "analyzers"):
+            analyzer = result.analyzers.get(key)
+
+        if analyzer is None:
+            df = result.dataframes.get(key)
+            if df is None:
+                self.logger.warning(f"No analyzer or DataFrame for key '{key}', skipping plots")
+                return
+            if isinstance(self.plotter, (SpecPlotter, SeabornPlotter)):
+                self.logger.warning(
+                    f"Plotter requires analyzer for key '{key}', skipping plots"
+                )
+                return
+            analyzer = df
+            metrics = result.metrics.get(key)
+        else:
+            metrics = None
 
         self.logger.info(f"Generating plots for '{key}'")
 
         save_dir = config.save_dir / "plots" if config.save_dir and config.save_plots else None
 
-        time_df = result.dataframes.get(f"{key}_time")
-        per_attr_df = result.dataframes.get(f"{key}_per_attractor")
-        tpm_df = result.dataframes.get(f"{key}_tpm")
-
-        figures = self.plotter.plot(
-            data=result.dataframes[key],
-            metrics=result.metrics.get(key),
-            save_dir=save_dir,
-            time_df=time_df,
-            per_attractor_df=per_attr_df,
-            tpm_df=tpm_df,
-        )
+        figures = self.plotter.plot(analyzer, save_dir=save_dir, metrics=metrics)
         result.figures.extend(figures)
 
         self.logger.info(f"Generated {len(figures)} plot(s)")
