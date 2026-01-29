@@ -1,0 +1,31 @@
+# =========================
+# Nature-style matplotlib
+# =========================
+
+# --- Figure ---
+figure.figsize : 18, 12
+figure.titlesize : 24
+
+# --- Fonts ---
+font.size : 24
+axes.titlesize : 24
+axes.labelsize : 24
+xtick.labelsize : 18
+ytick.labelsize : 18
+legend.fontsize : 24
+
+# --- Axes ---
+axes.grid : False
+axes.linewidth : 0.8
+axes.prop_cycle: cycler('color', ['1b9e77', 'd95f02', '7570b3', 'e7298a', '66a61e', 'e6ab02'])
+
+# --- Lines & markers ---
+lines.linewidth : 8
+lines.markersize : 8
+lines.marker : o
+lines.markeredgecolor : auto
+lines.markerfacecolor : auto
+
+# --- Patches (histograms, bars) ---
+patch.edgecolor : black
+patch.linewidth : 1.5

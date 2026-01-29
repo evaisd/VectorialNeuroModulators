@@ -1,0 +1,43 @@
+# ==================================
+# NeurIPS paper-scale matplotlib
+# ==================================
+
+# --- Figure ---
+figure.figsize : 6.5, 4.0
+figure.dpi : 150
+figure.titlesize : 12
+
+# --- Fonts ---
+font.size : 10
+axes.titlesize : 11
+axes.labelsize : 10
+xtick.labelsize : 9
+ytick.labelsize : 9
+legend.fontsize : 9
+
+# --- Axes ---
+axes.grid : False
+axes.linewidth : 0.8
+axes.prop_cycle : cycler('color', ['#4c72b0', '#dd8452', '#55a868', '#c44e52', '#8172b3', '#937860'])
+
+# --- Lines & markers ---
+lines.linewidth : 2.0
+lines.markersize : 4.5
+lines.marker : o
+lines.markeredgewidth : 0.8
+lines.markeredgecolor : auto
+lines.markerfacecolor : auto
+
+# --- Ticks ---
+xtick.major.width : 0.8
+ytick.major.width : 0.8
+xtick.minor.width : 0.6
+ytick.minor.width : 0.6
+
+# --- Patches (histograms, bars) ---
+patch.edgecolor : black
+patch.linewidth : 0.6
+
+# --- Saving ---
+savefig.bbox : tight
+savefig.pad_inches : 0.02

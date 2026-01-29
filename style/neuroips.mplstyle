@@ -1,0 +1,30 @@
+# =========================
+# NeurIPS-style matplotlib
+# =========================
+
+# --- Figure ---
+figure.figsize : 18, 12
+figure.titlesize : 24
+
+# --- Fonts ---
+font.size : 24
+axes.titlesize : 24
+axes.labelsize : 24
+xtick.labelsize : 18
+ytick.labelsize : 18
+legend.fontsize : 24
+
+# --- Axes ---
+axes.grid : False
+axes.prop_cycle : cycler('color', ['#4c72b0', '#dd8452', '#55a868', '#c44e52', '#8172b3', '#937860'])
+
+# --- Lines & markers ---
+lines.linewidth : 8
+lines.markersize : 8
+lines.marker : o
+lines.markeredgecolor : auto
+lines.markerfacecolor : auto
+
+# --- Patches (histograms, bars) ---
+patch.edgecolor : black
+patch.linewidth : 1.5

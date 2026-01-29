@@ -1,6 +1,6 @@
 init_params:
         delta_t: .0005
-        duration_sec: 2.5
+        duration_sec: 30
         mechanism: analytic
         n_neurons: 2000
         n_excitatory: 1600
@@ -74,8 +74,18 @@ settings:
   random_seed:
 
 arousal:
-  level: 0.275
+  level: 0.3
   L: .75
   x_0: .2
   k: 1.25
   M: 13.125
+
+perturbation:
+  rate:
+    vectors:
+      - [1, 0, 0, 0, -1.125, -1.125, -1.125, -1.125, -1.125, -1.125, -1.125, -1.125, -1.125, -1.125, -1.125, -1.125, -1.125, -1.125]
+
+    involved_clusters:
+      - [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    seed: 256
+    params: [0.0875]
