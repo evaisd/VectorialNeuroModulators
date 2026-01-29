@@ -8,8 +8,8 @@ import yaml
 import numpy as np
 
 from neuro_mod.execution.helpers.logger import Logger
-
 from neuro_mod.core.clustering import setup_matrices
+from neuro_mod.core.perturbations.vectorial import VectorialPerturbation
 
 
 class _Stager(ABC):
@@ -36,7 +36,6 @@ class _Stager(ABC):
             **kwargs
     ):
         self.config = config
-        self._init_perturbations = self._extract_perturbations(kwargs)
         self.logger = logger or Logger(name=self.__class__.__name__)
         self.settings = self._reader('settings')
 
@@ -45,15 +44,25 @@ class _Stager(ABC):
         if random_seed is None:
             random_seed = self.settings["random_seed"]
         self.rng = np.random.default_rng(random_seed)
+
+        # Read init_params early (needed for time-dependent perturbations)
+        for key, value in self._reader('init_params').items():
+            setattr(self, key, value)
+
         self.network_params = self._reader('architecture', 'network')
         self.clusters_params = self._reader('architecture', 'clusters')
         self.arousal_params = self._reader('arousal')
+
+        # Extract perturbations from kwargs, then merge with config-based perturbations
+        kwargs_perturbations = self._extract_perturbations(kwargs)
+        config_perturbations = self._generate_perturbations_from_config()
+        # kwargs perturbations override config perturbations
+        self._init_perturbations = {**config_perturbations, **kwargs_perturbations}
+
         self._apply_arousal_perturbations(self._init_perturbations)
         self._validate_arousal_level()
         self.arousal_denom = self._get_arousal_denom()
 
-        for key, value in self._reader('init_params').items():
-            setattr(self, key, value)
         j_perturbation = self._init_perturbations.get('j')
         j_baseline_perturbation = self._init_perturbations.get('j_baseline')
         j_potentiated_perturbation = self._init_perturbations.get('j_potentiated')
@@ -152,6 +161,102 @@ class _Stager(ABC):
             if key.endswith("_perturbation"):
                 perturbations[key[:-12]] = kwargs.pop(key)
         return perturbations
+
+    def _generate_perturbations_from_config(self) -> dict:
+        """Generate perturbation arrays from the YAML config.
+
+        Reads the 'perturbation' section from the config file and generates
+        perturbation arrays using VectorialPerturbation.
+
+        Returns:
+            Dictionary of perturbation arrays keyed by target name.
+        """
+        try:
+            perturbation_config = self._reader('perturbation')
+        except KeyError:
+            # No perturbation section in config
+            return {}
+
+        if not perturbation_config:
+            return {}
+
+        perturbations = {}
+        for name, cfg in perturbation_config.items():
+            if not isinstance(cfg, dict) or "params" not in cfg:
+                continue
+
+            perturbator = self._build_perturbator(cfg)
+            coeffs = np.asarray(cfg["params"], dtype=float)
+
+            # Handle time-dependent perturbations
+            time_vec = self._get_time_vector(cfg)
+            if time_vec is not None:
+                coeffs = np.outer(coeffs, time_vec)
+
+            values = perturbator.get_perturbation(*coeffs)
+            perturbations[name] = values
+
+            self.logger.debug(
+                f"Perturbation {name}: shape={np.asarray(values).shape} "
+                f"mean={np.mean(values):.4f}"
+            )
+
+        return perturbations
+
+    def _build_perturbator(self, cfg: dict) -> VectorialPerturbation:
+        """Build a VectorialPerturbation from a perturbation config block.
+
+        Args:
+            cfg: Perturbation configuration dictionary with keys:
+                - vectors: Optional list of basis vectors
+                - involved_clusters: Optional cluster indices per vector
+                - seed: Random seed for vector generation
+                - Other VectorialPerturbation kwargs
+
+        Returns:
+            Configured VectorialPerturbation instance.
+        """
+        cfg = dict(cfg)  # Don't mutate original
+        vectors = cfg.pop("vectors", [])
+        cfg.pop("params", None)  # Used separately
+        cfg.pop("time_dependence", None)  # Used separately
+        seed = cfg.pop("seed", None)
+
+        # Use stager's RNG if no seed specified, otherwise create new RNG
+        rng = self.rng if seed is None else np.random.default_rng(seed)
+
+        # Get length from cluster config
+        length = self.clusters_params.get("total_pops", self.clusters_params.get("n_clusters", 0) * 2 + 2)
+
+        params = {
+            **cfg,
+            "rng": rng,
+            "length": length,
+        }
+        return VectorialPerturbation(*vectors, **params)
+
+    def _get_time_vector(self, cfg: dict) -> np.ndarray | None:
+        """Build a time mask vector from perturbation config.
+
+        Args:
+            cfg: Perturbation configuration dictionary.
+
+        Returns:
+            Time mask vector or None if no time dependence configured.
+        """
+        time_dependence = cfg.get("time_dependence")
+        if not time_dependence or "shape" not in time_dependence:
+            return None
+
+        n_steps = int(self.duration_sec / self.delta_t)
+        time_vec = np.zeros(n_steps)
+
+        onset = int(time_dependence.get("onset_time", 0) / self.delta_t)
+        offset = time_dependence.get("offset_time")
+        offset = None if offset is None else int(offset / self.delta_t)
+
+        time_vec[slice(onset, offset)] = 1
+        return time_vec
 
     def _apply_arousal_perturbations(self, perturbations: dict):
         """Apply arousal perturbations to arousal parameters.
