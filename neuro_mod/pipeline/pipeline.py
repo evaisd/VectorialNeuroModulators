@@ -25,6 +25,93 @@ from neuro_mod.pipeline.protocols import (
 )
 
 
+def _persist_raw_output_to_dir(raw: Any, save_dir: Path, key: str, compress: bool) -> Any:
+    """Persist raw outputs to disk and inject file paths."""
+    data_dir = save_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(raw, dict):
+        if "spikes_path" not in raw:
+            spikes = raw.get("spikes")
+            if spikes is not None:
+                clusters = raw.get("clusters")
+                spikes_path = data_dir / f"{key}_spikes.npz"
+                if clusters is not None:
+                    if compress:
+                        np.savez_compressed(spikes_path, spikes=spikes, clusters=clusters)
+                    else:
+                        np.savez(spikes_path, spikes=spikes, clusters=clusters)
+                else:
+                    spikes_path = spikes_path.with_suffix(".npy")
+                    np.save(spikes_path, spikes)
+                updated = dict(raw)
+                updated["spikes_path"] = str(spikes_path)
+                updated.setdefault("clusters_path", None)
+                return updated
+
+        raw_path = data_dir / f"{key}_raw.npy"
+        np.save(raw_path, raw, allow_pickle=True)
+        updated = dict(raw)
+        updated.setdefault("raw_path", str(raw_path))
+        return updated
+
+    raw_path = data_dir / f"{key}_raw.pkl"
+    with open(raw_path, "wb") as handle:
+        pickle.dump(raw, handle)
+    return raw
+
+
+def _minimize_raw_output(raw: Any) -> Any:
+    """Remove large in-memory payloads when disk-backed paths exist."""
+    if isinstance(raw, dict) and ("spikes_path" in raw or "raw_path" in raw):
+        minimized = {}
+        for key, value in raw.items():
+            if key in ("spikes_path", "raw_path"):
+                minimized.setdefault(key, value)
+        return minimized
+    return raw
+
+
+def _simulate_and_persist_worker(
+    simulator_factory: SimulatorFactory[Any],
+    save_dir: Path,
+    seed: int,
+    key: str,
+    log_timings: bool,
+    compress: bool,
+) -> Any:
+    t0 = time.time()
+    simulator = simulator_factory(seed)
+    raw = simulator.run()
+    t1 = time.time()
+    raw = _persist_raw_output_to_dir(raw, save_dir, key, compress)
+    t2 = time.time()
+    raw = _minimize_raw_output(raw)
+    t3 = time.time()
+    if log_timings:
+        return raw, {
+            "simulate_seconds": t1 - t0,
+            "persist_seconds": t2 - t1,
+            "minimize_seconds": t3 - t2,
+            "total_seconds": t3 - t0,
+        }
+    return raw
+
+
+def _simulate_with_timing(
+    simulator_factory: SimulatorFactory[Any],
+    seed: int,
+    log_timings: bool,
+) -> Any:
+    t0 = time.time()
+    simulator = simulator_factory(seed)
+    raw = simulator.run()
+    t1 = time.time()
+    if log_timings:
+        return raw, {"simulate_seconds": t1 - t0}
+    return raw
+
+
 TRaw = TypeVar("TRaw")
 TProcessed = TypeVar("TProcessed")
 
@@ -359,19 +446,32 @@ class Pipeline(Generic[TRaw, TProcessed]):
                 self.logger.info(f"Simulating repeat {i + 1}/{n_total} (seed={seed})")
                 self._report_progress(config, i, n_total, f"simulate {i + 1}/{n_total}")
 
+                t0 = time.time()
                 raw = self._simulate(seed, config)
+                t1 = time.time()
                 self._log_memory_usage(config, f"After simulate repeat {i + 1}")
 
                 # Save to disk and get back reference with file paths
                 raw = self._persist_raw_output(raw, config, f"repeat_{i}")
+                t2 = time.time()
                 # Remove large in-memory data, keep only paths
                 raw = self._minimize_raw_output(raw)
+                t3 = time.time()
                 raw_refs.append(raw)
                 metadata.append({"seed": seed, "repeat_idx": i})
 
                 # Force garbage collection after each simulation
                 gc.collect()
                 self._log_memory_usage(config, f"After GC repeat {i + 1}")
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    self.logger.debug(
+                        "Repeat %s timings: simulate=%.2fs persist=%.2fs minimize=%.2fs total=%.2fs",
+                        i,
+                        t1 - t0,
+                        t2 - t1,
+                        t3 - t2,
+                        t3 - t0,
+                    )
 
         # Phase 2: Unified batch processing (processor loads from disk)
         self.logger.info("Starting unified batch processing (loading from disk)")
@@ -394,33 +494,75 @@ class Pipeline(Generic[TRaw, TProcessed]):
         Returns:
             Tuple of (raw_outputs, metadata) lists, ordered by repeat index.
         """
-        ExecutorClass = (
-            ProcessPoolExecutor if config.executor == "process"
-            else ThreadPoolExecutor
-        )
+        use_process = config.executor == "process"
+        ExecutorClass = ProcessPoolExecutor if use_process else ThreadPoolExecutor
         n_total = len(seeds)
 
         self.logger.info(f"Running {n_total} repeats in parallel ({config.executor} executor)")
+        log_timings = self.logger.isEnabledFor(logging.DEBUG)
 
         # Pre-allocate lists to maintain order
         raw_outputs: list[TRaw | None] = [None] * n_total
         metadata: list[dict[str, Any]] = [{}] * n_total
 
         with ExecutorClass(max_workers=config.max_workers) as executor:
-            futures = {
-                executor.submit(self._simulate, seed, config): (i, seed)
-                for i, seed in enumerate(seeds)
-            }
+            if use_process and config.persist_raw_in_worker:
+                futures = {
+                    executor.submit(
+                        _simulate_and_persist_worker,
+                        self.simulator_factory,
+                        config.save_dir,
+                        seed,
+                        f"repeat_{i}",
+                        log_timings,
+                        config.save_compressed,
+                    ): (i, seed)
+                    for i, seed in enumerate(seeds)
+                }
+            else:
+                futures = {
+                    executor.submit(
+                        _simulate_with_timing,
+                        self.simulator_factory,
+                        seed,
+                        log_timings,
+                    ): (i, seed)
+                    for i, seed in enumerate(seeds)
+                }
 
             for future in as_completed(futures):
                 i, seed = futures[future]
                 try:
                     raw = future.result()
-                    raw = self._persist_raw_output(raw, config, f"repeat_{i}")
-                    raw_outputs[i] = self._minimize_raw_output(raw)
+                    timings = None
+                    if log_timings:
+                        raw, timings = raw
+                    if not (use_process and config.persist_raw_in_worker):
+                        t0 = time.time()
+                        raw = self._persist_raw_output(raw, config, f"repeat_{i}")
+                        t1 = time.time()
+                        raw = self._minimize_raw_output(raw)
+                        t2 = time.time()
+                        if log_timings:
+                            persist_timing = {
+                                "persist_seconds": t1 - t0,
+                                "minimize_seconds": t2 - t1,
+                                "total_seconds": t2 - t0,
+                            }
+                            if timings:
+                                timings.update(persist_timing)
+                            else:
+                                timings = persist_timing
+                    raw_outputs[i] = raw
                     metadata[i] = {"seed": seed, "repeat_idx": i}
                     self.logger.debug(f"Repeat {i} complete (seed={seed})")
                     self._report_progress(config, i + 1, n_total, f"repeat {i + 1} done")
+                    if timings:
+                        self.logger.debug(
+                            "Repeat %s timings: %s",
+                            i,
+                            ", ".join(f"{k}={v:.2f}s" for k, v in timings.items()),
+                        )
                 except Exception as exc:
                     self.logger.error(f"Repeat {i} failed: {exc}")
                     raise
@@ -595,46 +737,11 @@ class Pipeline(Generic[TRaw, TProcessed]):
         """
         if config.save_dir is None:
             return raw
-
-        data_dir = config.save_dir / "data"
-        data_dir.mkdir(parents=True, exist_ok=True)
-
-        if isinstance(raw, dict):
-            if "spikes_path" not in raw:
-                spikes = raw.get("spikes")
-                if spikes is not None:
-                    clusters = raw.get("clusters")
-                    spikes_path = data_dir / f"{key}_spikes.npz"
-                    if clusters is not None:
-                        np.savez_compressed(spikes_path, spikes=spikes, clusters=clusters)
-                    else:
-                        spikes_path = spikes_path.with_suffix(".npy")
-                        np.save(spikes_path, spikes)
-                    updated = dict(raw)
-                    updated["spikes_path"] = str(spikes_path)
-                    updated.setdefault("clusters_path", None)
-                    return updated
-
-            raw_path = data_dir / f"{key}_raw.npy"
-            np.save(raw_path, raw, allow_pickle=True)
-            updated = dict(raw)
-            updated.setdefault("raw_path", str(raw_path))
-            return updated
-
-        raw_path = data_dir / f"{key}_raw.pkl"
-        with open(raw_path, "wb") as handle:
-            pickle.dump(raw, handle)
-        return raw
+        return _persist_raw_output_to_dir(raw, config.save_dir, key, config.save_compressed)
 
     def _minimize_raw_output(self, raw: TRaw) -> TRaw:
         """Remove large in-memory payloads when disk-backed paths exist."""
-        if isinstance(raw, dict) and ("spikes_path" in raw or "raw_path" in raw):
-            minimized = dict()
-            for key, value in raw.items():
-                if key in ("spikes_path", "raw_path"):
-                    minimized.setdefault(key, value)
-            return minimized
-        return raw
+        return _minimize_raw_output(raw)
 
     def _process_and_analyze(
         self,
@@ -657,12 +764,16 @@ class Pipeline(Generic[TRaw, TProcessed]):
         # Processing phase
         if config.run_processing and self.processor_factory is not None:
             self.logger.debug(f"Processing {key}")
+            t0 = time.time()
             processor = self.processor_factory(raw)
             processed = processor.process()
+            t1 = time.time()
             result.processed_data[key] = processed
 
             if config.save_processed and config.save_dir:
                 processor.save(config.save_dir / "processed")
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug("Processing %s took %.2fs", key, t1 - t0)
         else:
             result.processed_data[key] = processed
 
@@ -685,9 +796,11 @@ class Pipeline(Generic[TRaw, TProcessed]):
             return None
 
         self.logger.debug(f"Analyzing {key}")
+        t0 = time.time()
         analyzer = self._build_analyzer(processed, processor)
         df = analyzer.df
         metrics = analyzer.get_summary_metrics()
+        t1 = time.time()
 
         if sweep_value is not None and "sweep_value" not in df.columns:
             df["sweep_value"] = sweep_value
@@ -736,6 +849,8 @@ class Pipeline(Generic[TRaw, TProcessed]):
                     result.dataframes[f"{key}_tpm"] = tpm
 
         self._save_analysis_artifacts(config, result, key)
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug("Analysis %s took %.2fs", key, t1 - t0)
         return analyzer
 
     def _supports_batch_processing(self) -> bool:
@@ -788,12 +903,16 @@ class Pipeline(Generic[TRaw, TProcessed]):
         # Processing phase - unified batch processing (processor loads from disk)
         if config.run_processing and self.batch_processor_factory is not None:
             self.logger.debug(f"Batch processing {n_runs} runs for '{key}'")
+            t0 = time.time()
             batch_processor = self.batch_processor_factory(raw_refs, metadata)
             processed = batch_processor.process_batch(raw_refs, metadata)
+            t1 = time.time()
             result.processed_data[key] = processed
 
             if config.save_processed and config.save_dir:
                 batch_processor.save(config.save_dir / "processed")
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug("Batch processing '%s' took %.2fs", key, t1 - t0)
 
         # Analysis phase
         return self._analyze_and_store(

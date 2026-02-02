@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 import logging
 from enum import Enum, auto
 from pathlib import Path
@@ -46,12 +47,14 @@ class PipelineConfig:
         save_processed: Whether to save processed data.
         save_analysis: Whether to save analysis results.
         save_plots: Whether to save plot files.
+        save_compressed: Whether to compress saved raw spike arrays.
         run_processing: Whether to run the processing phase.
         run_analysis: Whether to run the analysis phase.
         run_plotting: Whether to run the plotting phase.
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR).
         log_to_file: Whether to write logs to file.
         progress_callback: Optional callback for progress updates.
+        persist_raw_in_worker: Persist raw outputs in worker processes when parallel.
     """
 
     # Execution mode
@@ -77,6 +80,7 @@ class PipelineConfig:
     save_processed: bool = True
     save_analysis: bool = True
     save_plots: bool = True
+    save_compressed: bool = True
 
     # Phase toggles
     run_processing: bool = True
@@ -89,6 +93,7 @@ class PipelineConfig:
     verbose_memory: bool = False
     """If True, log memory usage after each repeat (useful for debugging memory issues)."""
     progress_callback: Any = None  # Callable[[int, int, str], None] | None
+    persist_raw_in_worker: bool = False
 
     # Time evolution sampling
     time_evolution_dt: float | None = None
@@ -120,6 +125,16 @@ class PipelineConfig:
                     f"{self.mode.name} mode requires save_dir to be set for disk-based processing"
                 )
 
+        if self.parallel:
+            for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "TORCH_NUM_THREADS"):
+                os.environ.setdefault(name, "2")
+            if self.max_workers is None:
+                cpu_count = os.cpu_count() or 1
+                if self.executor == "process":
+                    self.max_workers = max(1, min(cpu_count - 1, 8))
+                else:
+                    self.max_workers = max(1, min(cpu_count - 2, 8))
+
     def to_dict(self) -> dict[str, Any]:
         """Convert config to a JSON-serializable dictionary."""
         return {
@@ -137,12 +152,14 @@ class PipelineConfig:
             "save_processed": self.save_processed,
             "save_analysis": self.save_analysis,
             "save_plots": self.save_plots,
+            "save_compressed": self.save_compressed,
             "run_processing": self.run_processing,
             "run_analysis": self.run_analysis,
             "run_plotting": self.run_plotting,
             "log_level": self.log_level,
             "log_to_file": self.log_to_file,
             "verbose_memory": self.verbose_memory,
+            "persist_raw_in_worker": self.persist_raw_in_worker,
             "time_evolution_dt": self.time_evolution_dt,
             "time_evolution_num_steps": self.time_evolution_num_steps,
         }
