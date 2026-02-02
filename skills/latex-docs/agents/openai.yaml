@@ -1,0 +1,4 @@
+interface:
+  display_name: "LaTeX Docs"
+  short_description: "Create and edit LaTeX docs with math, figures, and biblatex."
+  default_prompt: "Create or edit LaTeX (.tex) documents with equations, graphics/captions, and biblatex; use pdflatex and respect any journal templates."
