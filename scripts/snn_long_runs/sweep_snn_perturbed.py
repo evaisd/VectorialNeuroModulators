@@ -44,6 +44,42 @@ from neuro_mod.visualization import folder_plots_to_pdf
 from run_snn import create_plotter, _ExpSNNAnalyzer, load_seeds_from_file
 
 
+class SweepSimulatorFactory:
+    """Picklable simulator factory for process-based parallel execution."""
+
+    def __init__(
+        self,
+        config_path: Path,
+        rate_perturbation: np.ndarray,
+        *,
+        raster_plots: bool,
+        save_dir: Path,
+        output_keys: list[str] | None,
+        compile_net: bool,
+    ) -> None:
+        self.config_path = config_path
+        self.rate_perturbation = rate_perturbation
+        self.raster_plots = raster_plots
+        self.save_dir = save_dir
+        self.output_keys = output_keys
+        self.compile_net = compile_net
+
+    def __call__(self, seed: int, **kwargs):
+        output_keys = self.output_keys
+        if self.raster_plots and output_keys is not None:
+            output_keys = sorted(set(output_keys + ["spikes"]))
+        stager = StageSNNSimulation(
+            self.config_path,
+            random_seed=seed,
+            rate_perturbation=self.rate_perturbation,
+            output_keys=output_keys,
+            compile_net=self.compile_net,
+        )
+        if self.raster_plots:
+            return _RasterPlotRunner(stager, seed, self.save_dir)
+        return stager
+
+
 def _build_parser(root: Path) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Sweep rate perturbation values; run N repeats per value.",
@@ -118,6 +154,11 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
         help="Parallel executor backend.",
     )
     parser.add_argument(
+        "--persist-in-worker",
+        action="store_true",
+        help="Persist raw outputs inside worker processes (process executor only).",
+    )
+    parser.add_argument(
         "--no-plots",
         action="store_true",
         help="Skip plot generation.",
@@ -128,9 +169,31 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
         help="Save per-run raster plots to save_dir/plots/rasters.",
     )
     parser.add_argument(
+        "--lite-output",
+        action="store_true",
+        help="Only return spikes/clusters from simulations (faster, lower memory).",
+    )
+    parser.add_argument(
+        "--output-keys",
+        nargs="+",
+        default=None,
+        help="Explicit output keys to keep (overrides --lite-output). "
+             "Accepts space- or comma-separated values, e.g. spikes clusters or spikes,clusters.",
+    )
+    parser.add_argument(
         "--keep-raw",
         action="store_true",
         help="Keep raw spike data after processing (default: delete to save space).",
+    )
+    parser.add_argument(
+        "--no-compress",
+        action="store_true",
+        help="Disable compression for raw spike files (faster, larger).",
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Use torch.compile on the LIF network (PyTorch 2.x only).",
     )
     parser.add_argument(
         "--log-level",
@@ -314,6 +377,25 @@ def _parse_params_grid(items: list[str] | None) -> list[list[float]]:
     return grid
 
 
+def _parse_output_keys(items: list[str] | None) -> list[str] | None:
+    if not items:
+        return None
+    keys: list[str] = []
+    for item in items:
+        parts = [p.strip() for p in item.split(",") if p.strip()]
+        if parts:
+            keys.extend(parts)
+        else:
+            keys.append(item)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            deduped.append(key)
+    return deduped or None
+
+
 def create_processor_factory(dt: float = 0.5e-3):
     def factory(raw_data: dict[str, Any], **kwargs) -> SNNProcessor:
         spikes_path = raw_data.get("spikes_path")
@@ -337,18 +419,17 @@ def create_sweep_simulator_factory(
     *,
     raster_plots: bool,
     save_dir: Path,
+    output_keys: list[str] | None,
+    compile_net: bool,
 ):
-    def factory(seed: int, **kwargs):
-        stager = StageSNNSimulation(
-            config_path,
-            random_seed=seed,
-            rate_perturbation=rate_perturbation,
-        )
-        if raster_plots:
-            return _RasterPlotRunner(stager, seed, save_dir)
-        return stager
-
-    return factory
+    return SweepSimulatorFactory(
+        config_path,
+        rate_perturbation,
+        raster_plots=raster_plots,
+        save_dir=save_dir,
+        output_keys=output_keys,
+        compile_net=compile_net,
+    )
 
 
 def _run_sweep_value(
@@ -361,6 +442,7 @@ def _run_sweep_value(
     seeds: list[int] | None,
     args: argparse.Namespace,
     n_clusters: int,
+    output_keys: list[str] | None,
 ) -> None:
     save_dir.mkdir(parents=True, exist_ok=True)
     save_cmd(save_dir / "metadata")
@@ -372,6 +454,8 @@ def _run_sweep_value(
         rate_perturbation,
         raster_plots=args.raster_plots,
         save_dir=save_dir,
+        output_keys=output_keys,
+        compile_net=args.compile,
     )
     processor_factory = create_processor_factory()
     batch_processor_factory = SNNBatchProcessorFactory(
@@ -398,11 +482,13 @@ def _run_sweep_value(
         parallel=args.parallel,
         max_workers=args.max_workers,
         executor=args.executor,
+        persist_raw_in_worker=args.persist_in_worker,
         save_dir=save_dir,
         save_raw=False,
         save_processed=True,
         save_analysis=True,
         save_plots=not args.no_plots,
+        save_compressed=not args.no_compress,
         log_level=args.log_level,
         verbose_memory=args.verbose_memory,
         time_evolution_dt=(
@@ -453,6 +539,9 @@ def main() -> int:
     sim_config = _load_sim_config(config_path)
     n_clusters = _load_n_clusters(sim_config)
     build_rate_perturbation, n_params = _build_rate_perturbation_factory(sim_config)
+    output_keys = _parse_output_keys(args.output_keys)
+    if output_keys is None and args.lite_output:
+        output_keys = ["spikes", "clusters"]
     params_grid = _parse_params_grid(args.params_grid)
     if params_grid:
         if any(len(params) != n_params for params in params_grid):
@@ -487,6 +576,7 @@ def main() -> int:
             seeds=seeds,
             args=args,
             n_clusters=n_clusters,
+            output_keys=output_keys,
         )
 
     return 0

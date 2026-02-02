@@ -23,6 +23,8 @@ class StageSNNSimulation(_Stager):
     def __init__(self,
                  config: Path | str | bytes = DEFAULT_PARAMS,
                  random_seed: int = None,
+                 output_keys: list[str] | None = None,
+                 compile_net: bool = False,
                  **kwargs):
         """Initialize the spiking network stager.
 
@@ -32,6 +34,8 @@ class StageSNNSimulation(_Stager):
             **kwargs: Extra parameters forwarded to the logic stager.
         """
         super().__init__(config, random_seed, **kwargs)
+        self._output_keys = set(output_keys) if output_keys is not None else None
+        self._compile_net = compile_net
         self.stimulus_params = self._reader('stimulus')
         self.external_currents_params = self._reader('external_currents')
         self.weights, self.clusters = self._get_synaptic_weights()
@@ -46,7 +50,8 @@ class StageSNNSimulation(_Stager):
             "currents_generator": self.current_generator,
             **net_params
         }
-        return LIFNet(**params)
+        net = LIFNet(**params)
+        return self._maybe_compile_net(net)
 
     def _normalize_net_params(self, net_params: dict) -> dict:
         normalized = {}
@@ -117,7 +122,21 @@ class StageSNNSimulation(_Stager):
             "currents_generator": self.current_generator,
             **net_params
         }
-        return LIFNet(**params)
+        net = LIFNet(**params)
+        return self._maybe_compile_net(net)
+
+    def _maybe_compile_net(self, net: LIFNet) -> LIFNet:
+        if not self._compile_net:
+            return net
+        compile_fn = getattr(torch, "compile", None)
+        if compile_fn is None:
+            self.logger.warning("torch.compile not available; running uncompiled.")
+            return net
+        try:
+            return compile_fn(net)
+        except Exception as exc:
+            self.logger.warning("torch.compile failed; running uncompiled. (%s)", exc)
+            return net
 
     def _get_synaptic_weights(self):
         weights, clusters = clustering.generate_clustered_weight_matrix(
@@ -253,5 +272,7 @@ class StageSNNSimulation(_Stager):
             "weights": self.weights,
             "clusters": self.clusters,
         }
+        if self._output_keys is not None:
+            outputs = {key: value for key, value in outputs.items() if key in self._output_keys}
         self.logger.info("Spiking network simulation complete.")
         return outputs
