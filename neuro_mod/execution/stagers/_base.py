@@ -157,9 +157,10 @@ class _Stager(ABC):
             Dictionary of perturbation arrays keyed by parameter name.
         """
         perturbations = dict(kwargs.pop("perturbations", {}))
+        suffix = "_perturbation"
         for key in list(kwargs.keys()):
-            if key.endswith("_perturbation"):
-                perturbations[key[:-12]] = kwargs.pop(key)
+            if key.endswith(suffix):
+                perturbations[key[:-len(suffix)]] = kwargs.pop(key)
         return perturbations
 
     def _generate_perturbations_from_config(self) -> dict:
