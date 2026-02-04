@@ -64,3 +64,26 @@ def folder_plots_to_pdf(
             plt.close(fig)
 
     return output_path
+
+
+def image_to_pdf(
+    image_path: str | Path,
+    output_path: str | Path,
+    *,
+    dpi: int = 150,
+) -> Path:
+    """Save a raster image into a single-page PDF (rasterized)."""
+    image_path = Path(image_path)
+    if not image_path.is_file():
+        raise ValueError(f"Image does not exist: {image_path}")
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    image = mpimg.imread(image_path)
+    height, width = image.shape[:2]
+    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi, layout="tight")
+    ax.imshow(image)
+    ax.axis("off")
+    fig.savefig(output_path, bbox_inches="tight", pad_inches=0)
+    plt.close(fig)
+    return output_path

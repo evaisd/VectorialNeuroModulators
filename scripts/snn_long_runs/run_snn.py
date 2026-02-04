@@ -38,7 +38,7 @@ import yaml
 
 from neuro_mod.execution.stagers import StageSNNSimulation
 from neuro_mod.execution.helpers.cli import resolve_path, save_cmd
-from neuro_mod.visualization import folder_plots_to_pdf
+from neuro_mod.visualization import folder_plots_to_pdf, image_to_pdf
 from neuro_mod.analysis import MetricResult, metric, manipulation
 import pandas as pd
 
@@ -171,7 +171,13 @@ class _RasterPlotRunner:
         if spikes is not None and hasattr(self._stager, "_plot"):
             plot_dir = self._save_dir / "plots" / "rasters"
             plot_dir.mkdir(parents=True, exist_ok=True)
-            self._stager._plot(spikes, plt_path=plot_dir / f"spikes_seed_{self._seed}.png")
+            png_path = plot_dir / f"spikes_seed_{self._seed}.png"
+            self._stager._plot(spikes, plt_path=png_path)
+            pdf_path = png_path.with_suffix(".pdf")
+            try:
+                image_to_pdf(png_path, pdf_path)
+            except Exception as exc:
+                print(f"Warning: failed to create rasterized PDF {pdf_path}: {exc}")
         return outputs
 
 

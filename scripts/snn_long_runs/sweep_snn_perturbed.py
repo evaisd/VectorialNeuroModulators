@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Sweep perturbation coefficients; run N repeats per value.
 
+Outputs are stored under a single save_dir root, with per-sweep results keyed
+as sweep_0, sweep_1, ... in dataframes/ and metrics/. A sweep-level summary
+table and plots are saved under dataframes/sweep_summary.* and
+plots/sweep_summary/.
+
 Example:
   python scripts/sweep_snn_perturbed.py \
     --config configs/snn_long_run.yaml \
@@ -33,13 +38,19 @@ from typing import Any, Iterable
 import numpy as np
 import yaml
 import matplotlib.pyplot as plt
-
 from neuro_mod.core.spiking_net.processing import SNNBatchProcessorFactory, SNNProcessor
 from neuro_mod.core.perturbations.vectorial import VectorialPerturbation
 from neuro_mod.execution.helpers.cli import resolve_path, save_cmd
 from neuro_mod.execution.stagers import StageSNNSimulation
-from neuro_mod.pipeline import ExecutionMode, Pipeline, PipelineConfig
-from neuro_mod.visualization import folder_plots_to_pdf
+from neuro_mod.pipeline import (
+    ExecutionMode,
+    Pipeline,
+    PipelineConfig,
+    build_sweep_summary,
+    save_sweep_summary,
+    plot_sweep_summary,
+)
+from neuro_mod.visualization import folder_plots_to_pdf, image_to_pdf
 
 from run_snn import create_plotter, _ExpSNNAnalyzer, load_seeds_from_file
 
@@ -50,7 +61,8 @@ class SweepSimulatorFactory:
     def __init__(
         self,
         config_path: Path,
-        rate_perturbation: np.ndarray,
+        build_rate_perturbation: callable,
+        base_config: dict[str, Any],
         *,
         raster_plots: bool,
         save_dir: Path,
@@ -58,25 +70,32 @@ class SweepSimulatorFactory:
         compile_net: bool,
     ) -> None:
         self.config_path = config_path
-        self.rate_perturbation = rate_perturbation
+        self.build_rate_perturbation = build_rate_perturbation
+        self.base_config = base_config
         self.raster_plots = raster_plots
         self.save_dir = save_dir
         self.output_keys = output_keys
         self.compile_net = compile_net
 
     def __call__(self, seed: int, **kwargs):
+        sweep_value = kwargs.get("sweep_value")
+        sweep_idx = kwargs.get("sweep_idx")
+        params = _coerce_sweep_value(sweep_value)
+        rate_perturbation = self.build_rate_perturbation(params)
+        sweep_label = _format_sweep_label(params)
+        _maybe_write_sweep_config(self.base_config, params, self.save_dir, sweep_idx, sweep_label)
         output_keys = self.output_keys
         if self.raster_plots and output_keys is not None:
             output_keys = sorted(set(output_keys + ["spikes"]))
         stager = StageSNNSimulation(
             self.config_path,
             random_seed=seed,
-            rate_perturbation=self.rate_perturbation,
+            rate_perturbation=rate_perturbation,
             output_keys=output_keys,
             compile_net=self.compile_net,
         )
         if self.raster_plots:
-            return _RasterPlotRunner(stager, seed, self.save_dir)
+            return _RasterPlotRunner(stager, seed, self.save_dir, sweep_label)
         return stager
 
 
@@ -238,10 +257,17 @@ def _apply_style(style: str, root: Path) -> None:
 class _RasterPlotRunner:
     """Wrap a stager to optionally save per-run raster plots."""
 
-    def __init__(self, stager: StageSNNSimulation, seed: int, save_dir: Path) -> None:
+    def __init__(
+        self,
+        stager: StageSNNSimulation,
+        seed: int,
+        save_dir: Path,
+        sweep_label: str,
+    ) -> None:
         self._stager = stager
         self._seed = seed
         self._save_dir = save_dir
+        self._sweep_label = sweep_label
 
     def run(self) -> dict[str, Any]:
         outputs = self._stager.run()
@@ -249,12 +275,15 @@ class _RasterPlotRunner:
         if spikes is not None and hasattr(self._stager, "_plot"):
             plot_dir = self._save_dir / "plots" / "rasters"
             plot_dir.mkdir(parents=True, exist_ok=True)
-            self._stager._plot(spikes, plt_path=plot_dir / f"spikes_seed_{self._seed}.png")
+            filename = f"spikes_{self._sweep_label}_seed_{self._seed}.png"
+            png_path = plot_dir / filename
+            self._stager._plot(spikes, plt_path=png_path)
+            pdf_path = png_path.with_suffix(".pdf")
+            try:
+                image_to_pdf(png_path, pdf_path)
+            except Exception as exc:
+                print(f"Warning: failed to create rasterized PDF {pdf_path}: {exc}")
         return outputs
-
-
-def _format_run_dir(base: Path, index: int) -> Path:
-    return base / f"run_{index}"
 
 
 def _load_sim_config(config_path: Path) -> dict[str, Any]:
@@ -324,10 +353,10 @@ def _build_rate_perturbation_factory(
         raise ValueError("Config missing perturbation block for rate sweep.")
     rate_cfg, _ = _select_rate_perturbation_cfg(perturbation_cfg)
     vectors = rate_cfg.get("vectors", [])
-    if vectors:
-        length = len(vectors[0])
-    else:
-        length = _load_n_clusters(sim_config)
+    clusters_cfg = sim_config.get("architecture", {}).get("clusters", {})
+    length = clusters_cfg.get("total_pops")
+    if length is None:
+        length = _load_n_clusters(sim_config) * 2 + 2
     n_params = len(rate_cfg.get("params", [])) or len(vectors) or 1
     perturbator = _build_perturbator(rate_cfg, length=length)
     init_params = sim_config.get("init_params", {})
@@ -342,27 +371,6 @@ def _build_rate_perturbation_factory(
         return perturbator.get_perturbation(*coeffs)
 
     return build_rate_perturbation, n_params
-
-
-def _write_run_config(
-    base_config: dict[str, Any],
-    params: list[float],
-    out_path: Path,
-) -> None:
-    updated = copy.deepcopy(base_config)
-    perturbation_cfg = updated.get("perturbation")
-    if not isinstance(perturbation_cfg, dict):
-        raise ValueError("Config missing perturbation block for rate sweep.")
-    rate_cfg, key_path = _select_rate_perturbation_cfg(perturbation_cfg)
-    rate_cfg["params"] = [float(value) for value in params]
-    # write back in case rate_cfg was nested
-    if key_path == ["perturbation", "rate"]:
-        updated["perturbation"]["rate"] = rate_cfg
-    else:
-        updated["perturbation"] = rate_cfg
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w") as f:
-        yaml.safe_dump(updated, f, sort_keys=False)
 
 
 def _parse_params_grid(items: list[str] | None) -> list[list[float]]:
@@ -415,7 +423,8 @@ def create_processor_factory(dt: float = 0.5e-3):
 
 def create_sweep_simulator_factory(
     config_path: Path,
-    rate_perturbation: np.ndarray,
+    build_rate_perturbation: callable,
+    base_config: dict[str, Any],
     *,
     raster_plots: bool,
     save_dir: Path,
@@ -424,7 +433,8 @@ def create_sweep_simulator_factory(
 ):
     return SweepSimulatorFactory(
         config_path,
-        rate_perturbation,
+        build_rate_perturbation,
+        base_config,
         raster_plots=raster_plots,
         save_dir=save_dir,
         output_keys=output_keys,
@@ -432,92 +442,55 @@ def create_sweep_simulator_factory(
     )
 
 
-def _run_sweep_value(
-    *,
-    config_path: Path,
-    sim_config: dict[str, Any],
-    save_dir: Path,
+def _coerce_sweep_value(value: Any) -> list[float]:
+    if value is None:
+        raise ValueError("Missing sweep_value for sweep execution.")
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return [float(v) for v in value]
+    return [float(value)]
+
+
+def _format_sweep_label(params: list[float]) -> str:
+    return "sweep_" + "_".join(f"{value:g}" for value in params)
+
+
+def _write_sweep_config(
+    base_config: dict[str, Any],
     params: list[float],
-    rate_perturbation: np.ndarray,
-    seeds: list[int] | None,
-    args: argparse.Namespace,
-    n_clusters: int,
-    output_keys: list[str] | None,
+    out_path: Path,
 ) -> None:
-    save_dir.mkdir(parents=True, exist_ok=True)
-    save_cmd(save_dir / "metadata")
-    run_config_path = save_dir / "metadata" / "config.yaml"
-    _write_run_config(sim_config, params, run_config_path)
+    updated = copy.deepcopy(base_config)
+    perturbation_cfg = updated.get("perturbation")
+    if not isinstance(perturbation_cfg, dict):
+        raise ValueError("Config missing perturbation block for rate sweep.")
+    rate_cfg, key_path = _select_rate_perturbation_cfg(perturbation_cfg)
+    rate_cfg["params"] = [float(value) for value in params]
+    if key_path == ["perturbation", "rate"]:
+        updated["perturbation"]["rate"] = rate_cfg
+    else:
+        updated["perturbation"] = rate_cfg
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w") as f:
+        yaml.safe_dump(updated, f, sort_keys=False)
 
-    simulator_factory = create_sweep_simulator_factory(
-        run_config_path,
-        rate_perturbation,
-        raster_plots=args.raster_plots,
-        save_dir=save_dir,
-        output_keys=output_keys,
-        compile_net=args.compile,
-    )
-    processor_factory = create_processor_factory()
-    batch_processor_factory = SNNBatchProcessorFactory(
-        clustering_params={"n_excitatory_clusters": n_clusters},
-    )
-    plotter = None if args.no_plots else create_plotter(
-        time_dt_ms=args.time_dt_ms,
-        time_steps=args.time_steps,
-    )
 
-    pipeline = Pipeline(
-        simulator_factory=simulator_factory,
-        processor_factory=processor_factory,
-        batch_processor_factory=batch_processor_factory,
-        analyzer_factory=_ExpSNNAnalyzer,
-        plotter=plotter,
-    )
-
-    config = PipelineConfig(
-        mode=ExecutionMode.REPEATED,
-        n_repeats=args.n_repeats,
-        base_seed=args.seed,
-        seeds=seeds,
-        parallel=args.parallel,
-        max_workers=args.max_workers,
-        executor=args.executor,
-        persist_raw_in_worker=args.persist_in_worker,
-        save_dir=save_dir,
-        save_raw=False,
-        save_processed=True,
-        save_analysis=True,
-        save_plots=not args.no_plots,
-        save_compressed=not args.no_compress,
-        log_level=args.log_level,
-        verbose_memory=args.verbose_memory,
-        time_evolution_dt=(
-            args.time_dt_ms / 1e3 if args.time_dt_ms is not None else None
-        ),
-        time_evolution_num_steps=args.time_steps,
-    )
-
-    result = pipeline.run(config)
-
-    plots_dir = save_dir / "plots"
-    if not args.no_plots and plots_dir.is_dir() and any(plots_dir.glob("*.png")):
-        try:
-            folder_plots_to_pdf(
-                plots_dir,
-                output_path=plots_dir / "analysis_report.pdf",
-            )
-        except ValueError as exc:
-            print(f"Skipping PDF export: {exc}")
-
-    if not args.keep_raw:
-        raw_data_dir = save_dir / "data"
-        if raw_data_dir.exists():
-            shutil.rmtree(raw_data_dir)
-
-    print(
-        f"Sweep params {params}: completed in {result.duration_seconds:.2f}s."
-        f" Results at {save_dir}"
-    )
+def _maybe_write_sweep_config(
+    base_config: dict[str, Any],
+    params: list[float],
+    save_dir: Path,
+    sweep_idx: int | None,
+    sweep_label: str,
+) -> None:
+    if save_dir is None:
+        return
+    if sweep_idx is not None:
+        sweep_key = f"sweep_{sweep_idx}"
+    else:
+        sweep_key = sweep_label
+    out_path = save_dir / "metadata" / sweep_key / "config.yaml"
+    if out_path.exists():
+        return
+    _write_sweep_config(base_config, params, out_path)
 
 
 def main() -> int:
@@ -564,20 +537,92 @@ def main() -> int:
             )
         sweep_params = [[value] for value in args.sweep_values]
 
-    for idx, params in enumerate(sweep_params):
-        rate_perturbation = build_rate_perturbation(params)
-        sweep_dir = _format_run_dir(save_root, idx)
-        _run_sweep_value(
-            config_path=config_path,
-            sim_config=sim_config,
-            save_dir=sweep_dir,
-            params=params,
-            rate_perturbation=rate_perturbation,
-            seeds=seeds,
-            args=args,
-            n_clusters=n_clusters,
-            output_keys=output_keys,
-        )
+    save_root.mkdir(parents=True, exist_ok=True)
+    save_cmd(save_root / "metadata")
+
+    simulator_factory = create_sweep_simulator_factory(
+        config_path,
+        build_rate_perturbation,
+        sim_config,
+        raster_plots=args.raster_plots,
+        save_dir=save_root,
+        output_keys=output_keys,
+        compile_net=args.compile,
+    )
+    processor_factory = create_processor_factory()
+    batch_processor_factory = SNNBatchProcessorFactory(
+        clustering_params={"n_excitatory_clusters": n_clusters},
+    )
+    plotter = None if args.no_plots else create_plotter(
+        time_dt_ms=args.time_dt_ms,
+        time_steps=args.time_steps,
+    )
+
+    pipeline = Pipeline(
+        simulator_factory=simulator_factory,
+        processor_factory=processor_factory,
+        batch_processor_factory=batch_processor_factory,
+        analyzer_factory=_ExpSNNAnalyzer,
+        plotter=plotter,
+    )
+
+    config = PipelineConfig(
+        mode=ExecutionMode.SWEEP_REPEATED,
+        n_repeats=args.n_repeats,
+        base_seed=args.seed,
+        seeds=seeds,
+        sweep_param="perturbation.rate.params",
+        sweep_values=sweep_params,
+        parallel=args.parallel,
+        max_workers=args.max_workers,
+        executor=args.executor,
+        persist_raw_in_worker=args.persist_in_worker,
+        save_dir=save_root,
+        save_raw=False,
+        save_processed=True,
+        save_analysis=True,
+        save_plots=not args.no_plots,
+        save_compressed=not args.no_compress,
+        log_level=args.log_level,
+        verbose_memory=args.verbose_memory,
+        time_evolution_dt=(
+            args.time_dt_ms / 1e3 if args.time_dt_ms is not None else None
+        ),
+        time_evolution_num_steps=args.time_steps,
+    )
+
+    result = pipeline.run(config)
+
+    summary_df = build_sweep_summary(result, sweep_params)
+    save_sweep_summary(save_root, summary_df)
+
+    if not args.no_plots:
+        aggregated_df = result.dataframes.get("aggregated")
+        plot_sweep_summary(save_root, summary_df, aggregated_df)
+
+        plots_dir = save_root / "plots"
+        if plots_dir.is_dir():
+            for subdir in sorted(p for p in plots_dir.iterdir() if p.is_dir()):
+                pngs = list(subdir.glob("*.png"))
+                if not pngs:
+                    continue
+                try:
+                    folder_plots_to_pdf(
+                        subdir,
+                        output_path=subdir / "analysis_report.pdf",
+                    )
+                except ValueError as exc:
+                    print(f"Skipping PDF export in {subdir}: {exc}")
+
+    if not args.keep_raw:
+        raw_data_dir = save_root / "data"
+        if raw_data_dir.exists():
+            shutil.rmtree(raw_data_dir)
+
+    print(
+        f"Sweep completed in {result.duration_seconds:.2f}s."
+        f" Results at {save_root}"
+    )
 
     return 0
 
