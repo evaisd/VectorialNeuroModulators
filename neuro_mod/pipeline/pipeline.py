@@ -589,7 +589,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
             self.logger.info(f"Sweep step {i + 1}/{n_values}: {config.sweep_param}={value}")
             self._report_progress(config, i, n_values, f"sweep {i + 1}/{n_values}")
 
-            raw = self._simulate_with_param(seed, config, config.sweep_param, value)
+            raw = self._simulate_with_param(seed, config, config.sweep_param, value, sweep_idx=i)
             raw = self._persist_raw_output(raw, config, f"sweep_{i}")
             raw = self._minimize_raw_output(raw)
             analyzer = self._process_and_analyze(config, result, raw, key=f"sweep_{i}")
@@ -654,7 +654,13 @@ class Pipeline(Generic[TRaw, TProcessed]):
                 )
                 self._report_progress(config, step, n_total, f"sweep {i + 1}, repeat {j + 1}")
 
-                raw = self._simulate_with_param(seed, config, config.sweep_param, value)
+                raw = self._simulate_with_param(
+                    seed,
+                    config,
+                    config.sweep_param,
+                    value,
+                    sweep_idx=i,
+                )
                 self._log_memory_usage(config, f"After simulate sweep {i + 1}, repeat {j + 1}")
 
                 # Save to disk and get back reference with file paths
@@ -708,6 +714,8 @@ class Pipeline(Generic[TRaw, TProcessed]):
         config: PipelineConfig,
         param: str | list[str],
         value: Any,
+        *,
+        sweep_idx: int | None = None,
     ) -> TRaw:
         """Run simulation with modified parameter.
 
@@ -717,7 +725,12 @@ class Pipeline(Generic[TRaw, TProcessed]):
         """
         # Create simulator with sweep parameter override
         # The factory implementation should handle this
-        simulator = self.simulator_factory(seed, sweep_param=param, sweep_value=value)
+        simulator = self.simulator_factory(
+            seed,
+            sweep_param=param,
+            sweep_value=value,
+            sweep_idx=sweep_idx,
+        )
         self.logger.debug(f"Starting simulation (seed={seed}, {param}={value})")
         result = simulator.run()
         self.logger.debug(f"Simulation complete (seed={seed})")
@@ -770,8 +783,9 @@ class Pipeline(Generic[TRaw, TProcessed]):
             t1 = time.time()
             result.processed_data[key] = processed
 
-            if config.save_processed and config.save_dir:
-                processor.save(config.save_dir / "processed")
+            processed_dir = self._get_processed_dir(config, key)
+            if processed_dir is not None:
+                processor.save(processed_dir)
             if self.logger.isEnabledFor(logging.DEBUG):
                 self.logger.debug("Processing %s took %.2fs", key, t1 - t0)
         else:
@@ -909,8 +923,9 @@ class Pipeline(Generic[TRaw, TProcessed]):
             t1 = time.time()
             result.processed_data[key] = processed
 
-            if config.save_processed and config.save_dir:
-                batch_processor.save(config.save_dir / "processed")
+            processed_dir = self._get_processed_dir(config, key)
+            if processed_dir is not None:
+                batch_processor.save(processed_dir)
             if self.logger.isEnabledFor(logging.DEBUG):
                 self.logger.debug("Batch processing '%s' took %.2fs", key, t1 - t0)
 
@@ -1087,12 +1102,28 @@ class Pipeline(Generic[TRaw, TProcessed]):
 
         self.logger.info(f"Generating plots for '{key}'")
 
-        save_dir = config.save_dir / "plots" if config.save_dir and config.save_plots else None
+        save_dir = self._get_plots_dir(config, key)
 
         figures = self.plotter.plot(analyzer, save_dir=save_dir, metrics=metrics)
         result.figures.extend(figures)
 
         self.logger.info(f"Generated {len(figures)} plot(s)")
+
+    def _get_processed_dir(self, config: PipelineConfig, key: str) -> Path | None:
+        if not (config.save_dir and config.save_processed):
+            return None
+        base = config.save_dir / "processed"
+        if config.mode in (ExecutionMode.SWEEP, ExecutionMode.SWEEP_REPEATED):
+            return base / key
+        return base
+
+    def _get_plots_dir(self, config: PipelineConfig, key: str) -> Path | None:
+        if not (config.save_dir and config.save_plots):
+            return None
+        base = config.save_dir / "plots"
+        if config.mode in (ExecutionMode.SWEEP, ExecutionMode.SWEEP_REPEATED):
+            return base / key
+        return base
 
     def _align_transition_matrices(self, result: PipelineResult) -> None:
         """Align transition matrices across runs and store in result.dataframes."""
