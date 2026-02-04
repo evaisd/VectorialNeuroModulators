@@ -8,6 +8,7 @@ __pycache__/
 .ipynb_checkpoints/
 /pg.ipynb
 /.claude/
+/.codex/
 /.venv/
 /.run/
 /.mplconfig/
