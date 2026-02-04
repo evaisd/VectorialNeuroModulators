@@ -52,6 +52,11 @@ from neuro_mod.pipeline.protocols import (
     Simulator,
     SimulatorFactory,
 )
+from neuro_mod.pipeline.sweep_summary import (
+    build_sweep_summary,
+    save_sweep_summary,
+    plot_sweep_summary,
+)
 
 __all__ = [
     # Core Pipeline
@@ -79,4 +84,8 @@ __all__ = [
     "MetricResult",
     "manipulation",
     "metric",
+    # Sweep summary helpers
+    "build_sweep_summary",
+    "save_sweep_summary",
+    "plot_sweep_summary",
 ]
