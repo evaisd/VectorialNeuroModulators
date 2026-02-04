@@ -1,5 +1,5 @@
 init_params:
-        delta_t: .001
+        delta_t: .0005
         duration_sec: 30
         mechanism: analytic
         n_neurons: 2000
