@@ -216,21 +216,26 @@ class SNNAnalyzer(BaseAnalyzer):
         t_to: float | None = None,
         labels: str = "identity",
         canonical_labels: list[Any] | None = None,
+        order: str = "lex",
     ) -> pd.DataFrame:
         matrix = self.get_transition_matrix(t_from=t_from, t_to=t_to)
         attractors_data = self.get_attractors_data(t_from=t_from, t_to=t_to)
+        ordered_indices: list[Any] = []
+        ordered_identities: list[Any] = []
+        if order == "lex":
+            ordered_indices, ordered_identities = helpers.get_attractor_lex_order(attractors_data)
 
         if labels == "identity":
             identities = helpers.get_attractor_identities_in_order(attractors_data)
             df = pd.DataFrame(matrix, index=identities, columns=identities)
+            if ordered_identities and len(ordered_identities) == df.shape[0]:
+                df = df.reindex(index=ordered_identities, columns=ordered_identities)
         else:
             indices = self._get_attractor_indices_in_order(t_from=t_from, t_to=t_to)
             if indices and matrix.shape[0] == len(indices):
                 df = pd.DataFrame(matrix, index=indices, columns=indices)
-                mapping = pd.Series(self.attractor_map).sort_values()
-                ordered = [idx for idx in mapping.index if idx in df.index]
-                if ordered and len(ordered) == df.shape[0]:
-                    df = df.loc[ordered, ordered]
+                if ordered_indices and len(ordered_indices) == df.shape[0]:
+                    df = df.reindex(index=ordered_indices, columns=ordered_indices)
             else:
                 df = pd.DataFrame(matrix)
 

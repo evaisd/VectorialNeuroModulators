@@ -18,6 +18,7 @@ __all__ = [
     "align_transition_matrices",
     "build_canonical_attractor_identities",
     "build_canonical_labels_from_tpms",
+    "get_attractor_lex_order",
     "load_from_path",
     "load_config",
     "get_attractor_indices_in_order",
@@ -283,3 +284,20 @@ def get_attractor_indices_in_order(
         )
     ]
     return [attractors_data[identity].get("idx", identity) for identity in identities]
+
+
+def get_attractor_lex_order(
+    attractors_data: dict,
+) -> tuple[list[Any], list[Any]]:
+    """Return lex-ordered attractor indices and identities.
+
+    Ordering is based on the attractor identity (cluster pattern) using the
+    same sort key as canonical label building.
+    """
+    if not attractors_data:
+        return [], []
+    mapping = build_attractor_map(attractors_data)
+    ordered = sorted(mapping.items(), key=lambda item: _identity_sort_key(item[1]))
+    ordered_indices = [idx for idx, _ in ordered]
+    ordered_identities = [identity for _, identity in ordered]
+    return ordered_indices, ordered_identities
