@@ -112,6 +112,62 @@ def _simulate_with_timing(
     return raw
 
 
+def _simulate_with_param_and_persist_worker(
+    simulator_factory: SimulatorFactory[Any],
+    save_dir: Path,
+    seed: int,
+    key: str,
+    log_timings: bool,
+    compress: bool,
+    sweep_param: str | list[str],
+    sweep_value: Any,
+    sweep_idx: int | None,
+) -> Any:
+    t0 = time.time()
+    simulator = simulator_factory(
+        seed,
+        sweep_param=sweep_param,
+        sweep_value=sweep_value,
+        sweep_idx=sweep_idx,
+    )
+    raw = simulator.run()
+    t1 = time.time()
+    raw = _persist_raw_output_to_dir(raw, save_dir, key, compress)
+    t2 = time.time()
+    raw = _minimize_raw_output(raw)
+    t3 = time.time()
+    if log_timings:
+        return raw, {
+            "simulate_seconds": t1 - t0,
+            "persist_seconds": t2 - t1,
+            "minimize_seconds": t3 - t2,
+            "total_seconds": t3 - t0,
+        }
+    return raw
+
+
+def _simulate_with_param_timing(
+    simulator_factory: SimulatorFactory[Any],
+    seed: int,
+    log_timings: bool,
+    sweep_param: str | list[str],
+    sweep_value: Any,
+    sweep_idx: int | None,
+) -> Any:
+    t0 = time.time()
+    simulator = simulator_factory(
+        seed,
+        sweep_param=sweep_param,
+        sweep_value=sweep_value,
+        sweep_idx=sweep_idx,
+    )
+    raw = simulator.run()
+    t1 = time.time()
+    if log_timings:
+        return raw, {"simulate_seconds": t1 - t0}
+    return raw
+
+
 TRaw = TypeVar("TRaw")
 TProcessed = TypeVar("TProcessed")
 
@@ -569,6 +625,136 @@ class Pipeline(Generic[TRaw, TProcessed]):
 
         return raw_outputs, metadata  # type: ignore[return-value]
 
+    def _simulate_sweep_repeated_parallel(
+        self,
+        config: PipelineConfig,
+        seeds: list[int],
+    ) -> tuple[dict[int, list[TRaw]], dict[int, list[dict[str, Any]]]]:
+        """Run sweep + repeated simulations in parallel.
+
+        Returns:
+            Tuple of (raw_refs_by_sweep, meta_by_sweep) dicts.
+        """
+        assert config.sweep_values is not None
+        assert config.sweep_param is not None
+
+        use_process = config.executor == "process"
+        ExecutorClass = ProcessPoolExecutor if use_process else ThreadPoolExecutor
+
+        n_values = len(config.sweep_values)
+        n_repeats = len(seeds)
+        n_total = n_values * n_repeats
+
+        self.logger.info(
+            "Running %s sweep×repeat simulations in parallel (%s executor)",
+            n_total,
+            config.executor,
+        )
+        log_timings = self.logger.isEnabledFor(logging.DEBUG)
+
+        raw_refs_by_sweep: dict[int, list[TRaw | None]] = {
+            i: [None] * n_repeats for i in range(n_values)
+        }
+        meta_by_sweep: dict[int, list[dict[str, Any] | None]] = {
+            i: [None] * n_repeats for i in range(n_values)
+        }
+
+        with ExecutorClass(max_workers=config.max_workers) as executor:
+            futures: dict[Any, tuple[int, int, int, Any]] = {}
+            for i, value in enumerate(config.sweep_values):
+                for j, seed in enumerate(seeds):
+                    key = f"sweep_{i}_repeat_{j}"
+                    if use_process and config.persist_raw_in_worker:
+                        future = executor.submit(
+                            _simulate_with_param_and_persist_worker,
+                            self.simulator_factory,
+                            config.save_dir,
+                            seed,
+                            key,
+                            log_timings,
+                            config.save_compressed,
+                            config.sweep_param,
+                            value,
+                            i,
+                        )
+                    else:
+                        future = executor.submit(
+                            _simulate_with_param_timing,
+                            self.simulator_factory,
+                            seed,
+                            log_timings,
+                            config.sweep_param,
+                            value,
+                            i,
+                        )
+                    futures[future] = (i, j, seed, value)
+
+            completed = 0
+            for future in as_completed(futures):
+                i, j, seed, value = futures[future]
+                try:
+                    raw = future.result()
+                    timings = None
+                    if log_timings:
+                        raw, timings = raw
+                    if not (use_process and config.persist_raw_in_worker):
+                        t0 = time.time()
+                        raw = self._persist_raw_output(raw, config, f"sweep_{i}_repeat_{j}")
+                        t1 = time.time()
+                        raw = self._minimize_raw_output(raw)
+                        t2 = time.time()
+                        if log_timings:
+                            persist_timing = {
+                                "persist_seconds": t1 - t0,
+                                "minimize_seconds": t2 - t1,
+                                "total_seconds": t2 - t0,
+                            }
+                            if timings:
+                                timings.update(persist_timing)
+                            else:
+                                timings = persist_timing
+                    raw_refs_by_sweep[i][j] = raw
+                    meta_by_sweep[i][j] = {
+                        "seed": seed,
+                        "repeat_idx": j,
+                        "sweep_value": value,
+                        "sweep_idx": i,
+                    }
+                    completed += 1
+                    self.logger.debug(
+                        "Sweep %s repeat %s complete (seed=%s)",
+                        i,
+                        j,
+                        seed,
+                    )
+                    self._report_progress(
+                        config,
+                        completed,
+                        n_total,
+                        f"sweep {i + 1}, repeat {j + 1} done",
+                    )
+                    if timings:
+                        self.logger.debug(
+                            "Sweep %s repeat %s timings: %s",
+                            i,
+                            j,
+                            ", ".join(f"{k}={v:.2f}s" for k, v in timings.items()),
+                        )
+                except Exception as exc:
+                    self.logger.error("Sweep %s repeat %s failed: %s", i, j, exc)
+                    raise
+
+        raw_refs: dict[int, list[TRaw]] = {}
+        meta_refs: dict[int, list[dict[str, Any]]] = {}
+        for i in range(n_values):
+            missing = [idx for idx, raw in enumerate(raw_refs_by_sweep[i]) if raw is None]
+            if missing:
+                raise RuntimeError(f"Missing sweep {i} outputs for repeats: {missing}")
+            raw_refs[i] = [raw for raw in raw_refs_by_sweep[i] if raw is not None]
+            meta_refs[i] = [meta for meta in meta_by_sweep[i] if meta is not None]
+
+        return raw_refs, meta_refs
+
     def _run_sweep(
         self,
         config: PipelineConfig,
@@ -642,42 +828,47 @@ class Pipeline(Generic[TRaw, TProcessed]):
 
         # Phase 1: Run all simulations, saving raw data to disk immediately
         # Group references by sweep value for later unified processing
-        raw_refs_by_sweep: dict[int, list[TRaw]] = defaultdict(list)
-        meta_by_sweep: dict[int, list[dict[str, Any]]] = defaultdict(list)
-        step = 0
+        if config.parallel and n_total > 1:
+            raw_refs_by_sweep, meta_by_sweep = self._simulate_sweep_repeated_parallel(
+                config, seeds
+            )
+        else:
+            raw_refs_by_sweep: dict[int, list[TRaw]] = defaultdict(list)
+            meta_by_sweep: dict[int, list[dict[str, Any]]] = defaultdict(list)
+            step = 0
 
-        for i, value in enumerate(config.sweep_values):
-            for j, seed in enumerate(seeds):
-                self.logger.info(
-                    f"Sweep {i + 1}/{n_values}, repeat {j + 1}/{n_repeats} "
-                    f"({config.sweep_param}={value}, seed={seed})"
-                )
-                self._report_progress(config, step, n_total, f"sweep {i + 1}, repeat {j + 1}")
+            for i, value in enumerate(config.sweep_values):
+                for j, seed in enumerate(seeds):
+                    self.logger.info(
+                        f"Sweep {i + 1}/{n_values}, repeat {j + 1}/{n_repeats} "
+                        f"({config.sweep_param}={value}, seed={seed})"
+                    )
+                    self._report_progress(config, step, n_total, f"sweep {i + 1}, repeat {j + 1}")
 
-                raw = self._simulate_with_param(
-                    seed,
-                    config,
-                    config.sweep_param,
-                    value,
-                    sweep_idx=i,
-                )
-                self._log_memory_usage(config, f"After simulate sweep {i + 1}, repeat {j + 1}")
+                    raw = self._simulate_with_param(
+                        seed,
+                        config,
+                        config.sweep_param,
+                        value,
+                        sweep_idx=i,
+                    )
+                    self._log_memory_usage(config, f"After simulate sweep {i + 1}, repeat {j + 1}")
 
-                # Save to disk and get back reference with file paths
-                raw = self._persist_raw_output(raw, config, f"sweep_{i}_repeat_{j}")
-                raw = self._minimize_raw_output(raw)
-                raw_refs_by_sweep[i].append(raw)
-                meta_by_sweep[i].append({
-                    "seed": seed,
-                    "repeat_idx": j,
-                    "sweep_value": value,
-                    "sweep_idx": i,
-                })
-                step += 1
+                    # Save to disk and get back reference with file paths
+                    raw = self._persist_raw_output(raw, config, f"sweep_{i}_repeat_{j}")
+                    raw = self._minimize_raw_output(raw)
+                    raw_refs_by_sweep[i].append(raw)
+                    meta_by_sweep[i].append({
+                        "seed": seed,
+                        "repeat_idx": j,
+                        "sweep_value": value,
+                        "sweep_idx": i,
+                    })
+                    step += 1
 
-                # Force garbage collection after each simulation
-                gc.collect()
-                self._log_memory_usage(config, f"After GC sweep {i + 1}, repeat {j + 1}")
+                    # Force garbage collection after each simulation
+                    gc.collect()
+                    self._log_memory_usage(config, f"After GC sweep {i + 1}, repeat {j + 1}")
 
         # Phase 2: Unified processing PER SWEEP VALUE (processor loads from disk)
         self.logger.info("Starting unified batch processing per sweep value")
