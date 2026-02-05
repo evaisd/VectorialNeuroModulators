@@ -16,6 +16,7 @@ from neuro_mod.core.spiking_net.analysis.logic import time_window
 __all__ = [
     "align_transition_matrix",
     "align_transition_matrices",
+    "extend_tpms_to_union",
     "build_canonical_attractor_identities",
     "build_canonical_labels_from_tpms",
     "get_attractor_lex_order",
@@ -91,6 +92,28 @@ def align_transition_matrices(
         key: align_transition_matrix(tpm, canonical_labels)
         for key, tpm in tpms.items()
     }
+    return list(canonical_labels), aligned
+
+
+def extend_tpms_to_union(
+    tpms: Iterable[pd.DataFrame],
+    *,
+    canonical_labels: Sequence[Any] | None = None,
+) -> tuple[list[Any], list[pd.DataFrame]]:
+    """Align a list of TPMs to the union of their attractor labels.
+
+    Args:
+        tpms: Iterable of transition probability matrices as DataFrames.
+        canonical_labels: Optional explicit label order to use.
+
+    Returns:
+        Tuple (canonical_labels, aligned_tpms) where aligned_tpms is a list of
+        reindexed DataFrames with missing labels filled with 0.0.
+    """
+    tpms_list = list(tpms)
+    if canonical_labels is None:
+        canonical_labels = build_canonical_labels_from_tpms(tpms_list)
+    aligned = [align_transition_matrix(tpm, canonical_labels) for tpm in tpms_list]
     return list(canonical_labels), aligned
 
 

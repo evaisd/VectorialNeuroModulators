@@ -12,3 +12,5 @@ __pycache__/
 /.venv/
 /.run/
 /.mplconfig/
+/pert_analysis.ipynb
+/pert_analysis_half.ipynb
