@@ -56,8 +56,8 @@ from neuro_mod.visualization import folder_plots_to_pdf, image_to_pdf
 from run_snn import create_plotter, _ExpSNNAnalyzer, load_seeds_from_file
 
 
-class RatePerturbationBuilder:
-    """Picklable rate-perturbation builder for parallel execution."""
+class PerturbationBuilder:
+    """Picklable perturbation builder for parallel execution."""
 
     def __init__(
         self,
@@ -85,7 +85,8 @@ class SweepSimulatorFactory:
     def __init__(
         self,
         config_path: Path,
-        build_rate_perturbation: callable,
+        build_perturbation: callable,
+        target_key: str,
         base_config: dict[str, Any],
         *,
         raster_plots: bool,
@@ -96,7 +97,8 @@ class SweepSimulatorFactory:
         logger_name: str = "SweepSimulatorFactory",
     ) -> None:
         self.config_path = config_path
-        self.build_rate_perturbation = build_rate_perturbation
+        self.build_perturbation = build_perturbation
+        self.target_key = target_key
         self.base_config = base_config
         self.raster_plots = raster_plots
         self.save_dir = save_dir
@@ -109,25 +111,38 @@ class SweepSimulatorFactory:
         sweep_value = kwargs.get("sweep_value")
         sweep_idx = kwargs.get("sweep_idx")
         params = _coerce_sweep_value(sweep_value)
-        rate_perturbation = self.build_rate_perturbation(params)
+        perturbation = self.build_perturbation(params)
         sweep_label = _format_sweep_label(params)
-        _maybe_write_sweep_config(self.base_config, params, self.save_dir, sweep_idx, sweep_label)
+        _maybe_write_sweep_config(
+            self.base_config,
+            params,
+            self.save_dir,
+            sweep_idx,
+            sweep_label,
+            target=self.target_key,
+        )
         logger = Logger(name=self.logger_name, level=self.log_level)
-        summary = _summarize_array(rate_perturbation)
+        summary = _summarize_array(perturbation)
         logger.debug_once(
-            f"sweep_perturbation:{sweep_label}:{summary}",
-            f"Sweep perturbation: sweep_value={sweep_value} params={params} summary={summary}"
+            f"sweep_perturbation:{self.target_key}:{sweep_label}:{summary}",
+            f"Sweep perturbation ({self.target_key}): sweep_value={sweep_value} "
+            f"params={params} summary={summary}"
         )
         output_keys = self.output_keys
         if self.raster_plots and output_keys is not None:
             output_keys = sorted(set(output_keys + ["spikes"]))
+        stager_kwargs = {}
+        if self.target_key == "rate":
+            stager_kwargs["rate_perturbation"] = perturbation
+        else:
+            stager_kwargs[f"{self.target_key}_perturbation"] = perturbation
         stager = StageSNNSimulation(
             self.config_path,
             random_seed=seed,
-            rate_perturbation=rate_perturbation,
             output_keys=output_keys,
             compile_net=self.compile_net,
             logger=logger,
+            **stager_kwargs,
         )
         if self.raster_plots:
             return _RasterPlotRunner(stager, seed, self.save_dir, sweep_label)
@@ -336,12 +351,22 @@ def _load_n_clusters(sim_config: dict[str, Any]) -> int:
     return int(n_clusters)
 
 
-def _select_rate_perturbation_cfg(
+def _select_perturbation_cfg(
     perturbation_cfg: dict[str, Any],
-) -> tuple[dict[str, Any], list[str]]:
+    target: str | None = None,
+) -> tuple[str, dict[str, Any], list[str]]:
+    if target is not None:
+        if target not in perturbation_cfg or not isinstance(perturbation_cfg[target], dict):
+            raise ValueError(f"Perturbation target '{target}' not found in config.")
+        return target, perturbation_cfg[target], ["perturbation", target]
     if "rate" in perturbation_cfg and isinstance(perturbation_cfg["rate"], dict):
-        return perturbation_cfg["rate"], ["perturbation", "rate"]
-    return perturbation_cfg, ["perturbation"]
+        return "rate", perturbation_cfg["rate"], ["perturbation", "rate"]
+    if len(perturbation_cfg) == 1:
+        key = next(iter(perturbation_cfg))
+        if not isinstance(perturbation_cfg[key], dict):
+            raise ValueError("Single perturbation entry must be a mapping.")
+        return key, perturbation_cfg[key], ["perturbation", key]
+    return "perturbation", perturbation_cfg, ["perturbation"]
 
 
 def _get_time_vector(rate_cfg: dict[str, Any], init_params: dict[str, Any]) -> np.ndarray | None:
@@ -380,36 +405,37 @@ def _build_perturbator(
     return VectorialPerturbation(*vectors, **params)
 
 
-def _build_rate_perturbation_factory(
+def _build_perturbation_factory(
     sim_config: dict[str, Any],
     logger: Logger | None = None,
-) -> tuple[callable, int]:
+    target: str | None = None,
+) -> tuple[str, callable, int]:
     perturbation_cfg = sim_config.get("perturbation")
     if not isinstance(perturbation_cfg, dict):
-        raise ValueError("Config missing perturbation block for rate sweep.")
-    rate_cfg, _ = _select_rate_perturbation_cfg(perturbation_cfg)
-    vectors = rate_cfg.get("vectors", [])
+        raise ValueError("Config missing perturbation block for sweep.")
+    target_key, target_cfg, _ = _select_perturbation_cfg(perturbation_cfg, target=target)
+    vectors = target_cfg.get("vectors", [])
     clusters_cfg = sim_config.get("architecture", {}).get("clusters", {})
     length = clusters_cfg.get("total_pops")
     if length is None:
         length = _load_n_clusters(sim_config) * 2 + 2
-    n_params = len(rate_cfg.get("params", [])) or len(vectors) or 1
-    perturbator = _build_perturbator(rate_cfg, length=length)
+    n_params = len(target_cfg.get("params", [])) or len(vectors) or 1
+    perturbator = _build_perturbator(target_cfg, length=length)
     init_params = sim_config.get("init_params", {})
-    time_vec = _get_time_vector(rate_cfg, init_params)
+    time_vec = _get_time_vector(target_cfg, init_params)
     if logger is not None:
         logger.debug(
-            "Rate perturbation factory (target=rate): "
+            f"Perturbation factory (target={target_key}): "
             f"n_params={n_params} vectors={len(vectors)} "
             f"length={length} time_dependence={time_vec is not None}"
         )
 
-    builder = RatePerturbationBuilder(
+    builder = PerturbationBuilder(
         vectors=perturbator.vectors,
         n_params=n_params,
         time_vec=time_vec,
     )
-    return builder, n_params
+    return target_key, builder, n_params
 
 
 def _parse_params_grid(items: list[str] | None) -> list[list[float]]:
@@ -462,7 +488,8 @@ def create_processor_factory(dt: float = 0.5e-3):
 
 def create_sweep_simulator_factory(
     config_path: Path,
-    build_rate_perturbation: callable,
+    build_perturbation: callable,
+    target_key: str,
     base_config: dict[str, Any],
     *,
     raster_plots: bool,
@@ -473,7 +500,8 @@ def create_sweep_simulator_factory(
 ):
     return SweepSimulatorFactory(
         config_path,
-        build_rate_perturbation,
+        build_perturbation,
+        target_key,
         base_config,
         raster_plots=raster_plots,
         save_dir=save_dir,
@@ -520,17 +548,19 @@ def _write_sweep_config(
     base_config: dict[str, Any],
     params: list[float],
     out_path: Path,
+    *,
+    target: str | None = None,
 ) -> None:
     updated = copy.deepcopy(base_config)
     perturbation_cfg = updated.get("perturbation")
     if not isinstance(perturbation_cfg, dict):
-        raise ValueError("Config missing perturbation block for rate sweep.")
-    rate_cfg, key_path = _select_rate_perturbation_cfg(perturbation_cfg)
-    rate_cfg["params"] = [float(value) for value in params]
-    if key_path == ["perturbation", "rate"]:
-        updated["perturbation"]["rate"] = rate_cfg
+        raise ValueError("Config missing perturbation block for sweep.")
+    target_key, target_cfg, key_path = _select_perturbation_cfg(perturbation_cfg, target=target)
+    target_cfg["params"] = [float(value) for value in params]
+    if key_path == ["perturbation", target_key]:
+        updated["perturbation"][target_key] = target_cfg
     else:
-        updated["perturbation"] = rate_cfg
+        updated["perturbation"] = target_cfg
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         yaml.safe_dump(updated, f, sort_keys=False)
@@ -542,6 +572,8 @@ def _maybe_write_sweep_config(
     save_dir: Path,
     sweep_idx: int | None,
     sweep_label: str,
+    *,
+    target: str | None = None,
 ) -> None:
     if save_dir is None:
         return
@@ -552,7 +584,7 @@ def _maybe_write_sweep_config(
     out_path = save_dir / "metadata" / sweep_key / "config.yaml"
     if out_path.exists():
         return
-    _write_sweep_config(base_config, params, out_path)
+    _write_sweep_config(base_config, params, out_path, target=target)
 
 
 def main() -> int:
@@ -574,7 +606,7 @@ def main() -> int:
     sim_config = _load_sim_config(config_path)
     n_clusters = _load_n_clusters(sim_config)
     sweep_logger = Logger(name="SweepPerturbation", level=args.log_level)
-    build_rate_perturbation, n_params = _build_rate_perturbation_factory(
+    target_key, build_perturbation, n_params = _build_perturbation_factory(
         sim_config,
         logger=sweep_logger,
     )
@@ -608,7 +640,8 @@ def main() -> int:
 
     simulator_factory = create_sweep_simulator_factory(
         config_path,
-        build_rate_perturbation,
+        build_perturbation,
+        target_key,
         sim_config,
         raster_plots=args.raster_plots,
         save_dir=save_root,
@@ -633,12 +666,17 @@ def main() -> int:
         plotter=plotter,
     )
 
+    if target_key == "perturbation":
+        sweep_param = "perturbation.params"
+    else:
+        sweep_param = f"perturbation.{target_key}.params"
+
     config = PipelineConfig(
         mode=ExecutionMode.SWEEP_REPEATED,
         n_repeats=args.n_repeats,
         base_seed=args.seed,
         seeds=seeds,
-        sweep_param="perturbation.rate.params",
+        sweep_param=sweep_param,
         sweep_values=sweep_params,
         parallel=args.parallel,
         max_workers=args.max_workers,
