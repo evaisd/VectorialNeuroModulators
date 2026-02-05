@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TextIO
+from typing import TextIO, ClassVar
 import sys
 import threading
 
@@ -25,8 +25,8 @@ class Logger:
     stream: TextIO = sys.stdout
     file_path: str | None = None
     include_timestamp: bool = True
-    _once_cache: set[str] = set()
-    _once_lock = threading.Lock()
+    _once_cache: ClassVar[set[str]] = set()
+    _once_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __post_init__(self) -> None:
         """Normalize level and open file handle if provided."""
