@@ -56,6 +56,29 @@ from neuro_mod.visualization import folder_plots_to_pdf, image_to_pdf
 from run_snn import create_plotter, _ExpSNNAnalyzer, load_seeds_from_file
 
 
+class RatePerturbationBuilder:
+    """Picklable rate-perturbation builder for parallel execution."""
+
+    def __init__(
+        self,
+        *,
+        vectors: np.ndarray,
+        n_params: int,
+        time_vec: np.ndarray | None,
+    ) -> None:
+        self._vectors = np.asarray(vectors, dtype=float)
+        self._n_params = int(n_params)
+        self._time_vec = None if time_vec is None else np.asarray(time_vec, dtype=float)
+
+    def __call__(self, params: Iterable[float]) -> np.ndarray:
+        coeffs = np.asarray(list(params), dtype=float)
+        if coeffs.size != self._n_params:
+            raise ValueError(f"Expected {self._n_params} coefficients, got {coeffs.size}.")
+        if self._time_vec is not None:
+            coeffs = np.outer(coeffs, self._time_vec)
+        return np.dot(self._vectors.T, coeffs)
+
+
 class SweepSimulatorFactory:
     """Picklable simulator factory for process-based parallel execution."""
 
@@ -380,15 +403,12 @@ def _build_rate_perturbation_factory(
             f"length={length} time_dependence={time_vec is not None}"
         )
 
-    def build_rate_perturbation(params: Iterable[float]) -> np.ndarray:
-        coeffs = np.asarray(list(params), dtype=float)
-        if coeffs.size != n_params:
-            raise ValueError(f"Expected {n_params} coefficients, got {coeffs.size}.")
-        if time_vec is not None:
-            coeffs = np.outer(coeffs, time_vec)
-        return perturbator.get_perturbation(*coeffs)
-
-    return build_rate_perturbation, n_params
+    builder = RatePerturbationBuilder(
+        vectors=perturbator.vectors,
+        n_params=n_params,
+        time_vec=time_vec,
+    )
+    return builder, n_params
 
 
 def _parse_params_grid(items: list[str] | None) -> list[list[float]]:
