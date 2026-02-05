@@ -1,6 +1,7 @@
 """Base stager definitions for simulation execution."""
 
 from io import BytesIO
+import json
 from pathlib import Path
 from abc import abstractmethod, ABC
 import shutil
@@ -62,7 +63,11 @@ class _Stager(ABC):
             }
         else:
             summary = {}
-        self.logger.debug(f"Kwargs perturbations: {summary}")
+        summary_key = json.dumps(summary, sort_keys=True)
+        self.logger.debug_once(
+            f"perturbations:kwargs:{summary_key}",
+            f"Kwargs perturbations: {summary}"
+        )
         config_perturbations = self._generate_perturbations_from_config()
         if config_perturbations:
             summary = {
@@ -71,7 +76,11 @@ class _Stager(ABC):
             }
         else:
             summary = {}
-        self.logger.debug(f"Config perturbations: {summary}")
+        summary_key = json.dumps(summary, sort_keys=True)
+        self.logger.debug_once(
+            f"perturbations:config:{summary_key}",
+            f"Config perturbations: {summary}"
+        )
         # kwargs perturbations override config perturbations
         self._init_perturbations = {**config_perturbations, **kwargs_perturbations}
         if self._init_perturbations:
@@ -81,7 +90,9 @@ class _Stager(ABC):
             }
         else:
             summary = {}
-        self.logger.debug(
+        summary_key = json.dumps(summary, sort_keys=True)
+        self.logger.debug_once(
+            f"perturbations:init:{summary_key}",
             "Init perturbations (config + kwargs override): "
             f"{summary}"
         )
@@ -149,14 +160,16 @@ class _Stager(ABC):
         j_baseline_perturbation = kwargs.get('j_baseline_perturbation')
         j_potentiated_perturbation = kwargs.get('j_potentiated_perturbation')
         if j_baseline_perturbation is not None:
-            self.logger.debug(
-                "Applying j_baseline perturbation: "
-                f"{self._summarize_perturbation(j_baseline_perturbation)}"
+            summary = self._summarize_perturbation(j_baseline_perturbation)
+            self.logger.debug_once(
+                f"perturbations:j_baseline:{summary}",
+                f"Applying j_baseline perturbation: {summary}"
             )
         if j_potentiated_perturbation is not None:
-            self.logger.debug(
-                "Applying j_potentiated perturbation: "
-                f"{self._summarize_perturbation(j_potentiated_perturbation)}"
+            summary = self._summarize_perturbation(j_potentiated_perturbation)
+            self.logger.debug_once(
+                f"perturbations:j_potentiated:{summary}",
+                f"Applying j_potentiated perturbation: {summary}"
             )
         j = self._apply_matrix_perturbation(j, j_baseline_perturbation, as_delta=True)
         j = self._apply_potentiated_perturbation(j, j_potentiated_perturbation, n_clusters, as_delta=True)
@@ -258,8 +271,10 @@ class _Stager(ABC):
             values = perturbator.get_perturbation(*coeffs)
             perturbations[name] = values
 
-            self.logger.debug(
-                f"Perturbation {name}: {self._summarize_perturbation(values)}"
+            summary = self._summarize_perturbation(values)
+            self.logger.debug_once(
+                f"perturbations:config_item:{name}:{summary}",
+                f"Perturbation {name}: {summary}"
             )
 
         return perturbations

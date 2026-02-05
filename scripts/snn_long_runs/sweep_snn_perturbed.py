@@ -113,9 +113,10 @@ class SweepSimulatorFactory:
         sweep_label = _format_sweep_label(params)
         _maybe_write_sweep_config(self.base_config, params, self.save_dir, sweep_idx, sweep_label)
         logger = Logger(name=self.logger_name, level=self.log_level)
-        logger.debug(
-            f"Sweep perturbation: sweep_value={sweep_value} "
-            f"params={params} summary={_summarize_array(rate_perturbation)}"
+        summary = _summarize_array(rate_perturbation)
+        logger.debug_once(
+            f"sweep_perturbation:{sweep_label}:{summary}",
+            f"Sweep perturbation: sweep_value={sweep_value} params={params} summary={summary}"
         )
         output_keys = self.output_keys
         if self.raster_plots and output_keys is not None:

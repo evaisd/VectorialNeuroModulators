@@ -25,6 +25,8 @@ class Logger:
     stream: TextIO = sys.stdout
     file_path: str | None = None
     include_timestamp: bool = True
+    _once_cache: set[str] = set()
+    _once_lock = threading.Lock()
 
     def __post_init__(self) -> None:
         """Normalize level and open file handle if provided."""
@@ -84,6 +86,17 @@ class Logger:
     def debug(self, message: str) -> None:
         """Log a debug message."""
         self.log("DEBUG", message)
+
+    def debug_once(self, key: str, message: str) -> None:
+        """Log a debug message once per unique key."""
+        if _LEVELS["DEBUG"] < _LEVELS[self.level]:
+            return
+        cache_key = f"{self.name}:{key}"
+        with self._once_lock:
+            if cache_key in self._once_cache:
+                return
+            self._once_cache.add(cache_key)
+        self.debug(message)
 
     def info(self, message: str) -> None:
         """Log an info message."""
