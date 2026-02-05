@@ -110,6 +110,10 @@ class StageSNNSimulation(_Stager):
         for key in ("j_ext", "threshold", "tau_membrane", "tau_synaptic", "tau_refractory"):
             if key not in perturbations:
                 continue
+            self.logger.debug(
+                f"Applying {key} perturbation: "
+                f"{self._summarize_perturbation(perturbations[key])}"
+            )
             base = _to_cluster_vector(net_params[key])
             base = base + self._coerce_cluster_vector(perturbations[key], n_pops)
             net_params[key] = self._expand_cluster_vector(base)
@@ -239,18 +243,30 @@ class StageSNNSimulation(_Stager):
         stimulus = torch.from_numpy(self._gen_stimulus())
         lif_net = self._get_lif_net_with_perturbations(perturbations) if perturbations else self._get_lif_net()
         perturbation_shape = (stimulus.shape[0], len(np.unique(self.clusters)))
+        rate_source = None
         rate_perturbation = perturbations.get('rate')
+        if rate_perturbation is not None:
+            rate_source = "kwargs"
         if rate_perturbation is None:
             rate_perturbation = self._init_perturbations.get('rate')
+            if rate_perturbation is not None:
+                rate_source = "config"
         if rate_perturbation is None:
             rate_perturbation = kwargs.get('rate_perturbation')
+            if rate_perturbation is not None:
+                rate_source = "kwargs_rate_perturbation"
         if rate_perturbation is None:
+            rate_source = "default_zeros"
             rate_perturbation = np.zeros(perturbation_shape)
         rate_perturbation = np.asarray(rate_perturbation, dtype=float)
         if rate_perturbation.ndim == 1 and rate_perturbation.shape[0] == perturbation_shape[1]:
             rate_perturbation = np.tile(rate_perturbation, (perturbation_shape[0], 1))
         elif rate_perturbation.ndim == 2 and rate_perturbation.shape[0] == perturbation_shape[1]:
             rate_perturbation = rate_perturbation.T
+        self.logger.debug(
+            f"Rate perturbation source={rate_source} "
+            f"summary={self._summarize_perturbation(rate_perturbation)}"
+        )
         external_currents = (self._generate_currents(c) for c in rate_perturbation)
         voltage = torch.zeros(self.n_neurons, dtype=torch.float64)
         current = torch.zeros(self.n_neurons, dtype=torch.float64)

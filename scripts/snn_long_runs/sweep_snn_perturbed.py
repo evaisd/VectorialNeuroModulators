@@ -41,6 +41,7 @@ import matplotlib.pyplot as plt
 from neuro_mod.core.spiking_net.processing import SNNBatchProcessorFactory, SNNProcessor
 from neuro_mod.core.perturbations.vectorial import VectorialPerturbation
 from neuro_mod.execution.helpers.cli import resolve_path, save_cmd
+from neuro_mod.execution.helpers.logger import Logger
 from neuro_mod.execution.stagers import StageSNNSimulation
 from neuro_mod.pipeline import (
     ExecutionMode,
@@ -68,6 +69,8 @@ class SweepSimulatorFactory:
         save_dir: Path,
         output_keys: list[str] | None,
         compile_net: bool,
+        log_level: str,
+        logger_name: str = "SweepSimulatorFactory",
     ) -> None:
         self.config_path = config_path
         self.build_rate_perturbation = build_rate_perturbation
@@ -76,6 +79,8 @@ class SweepSimulatorFactory:
         self.save_dir = save_dir
         self.output_keys = output_keys
         self.compile_net = compile_net
+        self.log_level = log_level
+        self.logger_name = logger_name
 
     def __call__(self, seed: int, **kwargs):
         sweep_value = kwargs.get("sweep_value")
@@ -84,6 +89,11 @@ class SweepSimulatorFactory:
         rate_perturbation = self.build_rate_perturbation(params)
         sweep_label = _format_sweep_label(params)
         _maybe_write_sweep_config(self.base_config, params, self.save_dir, sweep_idx, sweep_label)
+        logger = Logger(name=self.logger_name, level=self.log_level)
+        logger.debug(
+            f"Sweep perturbation: sweep_value={sweep_value} "
+            f"params={params} summary={_summarize_array(rate_perturbation)}"
+        )
         output_keys = self.output_keys
         if self.raster_plots and output_keys is not None:
             output_keys = sorted(set(output_keys + ["spikes"]))
@@ -93,6 +103,7 @@ class SweepSimulatorFactory:
             rate_perturbation=rate_perturbation,
             output_keys=output_keys,
             compile_net=self.compile_net,
+            logger=logger,
         )
         if self.raster_plots:
             return _RasterPlotRunner(stager, seed, self.save_dir, sweep_label)
@@ -347,6 +358,7 @@ def _build_perturbator(
 
 def _build_rate_perturbation_factory(
     sim_config: dict[str, Any],
+    logger: Logger | None = None,
 ) -> tuple[callable, int]:
     perturbation_cfg = sim_config.get("perturbation")
     if not isinstance(perturbation_cfg, dict):
@@ -361,6 +373,12 @@ def _build_rate_perturbation_factory(
     perturbator = _build_perturbator(rate_cfg, length=length)
     init_params = sim_config.get("init_params", {})
     time_vec = _get_time_vector(rate_cfg, init_params)
+    if logger is not None:
+        logger.debug(
+            "Rate perturbation factory (target=rate): "
+            f"n_params={n_params} vectors={len(vectors)} "
+            f"length={length} time_dependence={time_vec is not None}"
+        )
 
     def build_rate_perturbation(params: Iterable[float]) -> np.ndarray:
         coeffs = np.asarray(list(params), dtype=float)
@@ -430,6 +448,7 @@ def create_sweep_simulator_factory(
     save_dir: Path,
     output_keys: list[str] | None,
     compile_net: bool,
+    log_level: str,
 ):
     return SweepSimulatorFactory(
         config_path,
@@ -439,6 +458,7 @@ def create_sweep_simulator_factory(
         save_dir=save_dir,
         output_keys=output_keys,
         compile_net=compile_net,
+        log_level=log_level,
     )
 
 
@@ -452,6 +472,27 @@ def _coerce_sweep_value(value: Any) -> list[float]:
 
 def _format_sweep_label(params: list[float]) -> str:
     return "sweep_" + "_".join(f"{value:g}" for value in params)
+
+
+def _summarize_array(value: Any) -> str:
+    if value is None:
+        return "None"
+    arr = np.asarray(value, dtype=float)
+    shape = arr.shape
+    dtype = arr.dtype
+    if arr.size == 0:
+        return f"shape={shape} dtype={dtype} empty"
+    return (
+        "shape={shape} dtype={dtype} min={min_val:.6g} mean={mean_val:.6g} "
+        "max={max_val:.6g} std={std_val:.6g}"
+    ).format(
+        shape=shape,
+        dtype=dtype,
+        min_val=float(np.min(arr)),
+        mean_val=float(np.mean(arr)),
+        max_val=float(np.max(arr)),
+        std_val=float(np.std(arr)),
+    )
 
 
 def _write_sweep_config(
@@ -511,7 +552,11 @@ def main() -> int:
 
     sim_config = _load_sim_config(config_path)
     n_clusters = _load_n_clusters(sim_config)
-    build_rate_perturbation, n_params = _build_rate_perturbation_factory(sim_config)
+    sweep_logger = Logger(name="SweepPerturbation", level=args.log_level)
+    build_rate_perturbation, n_params = _build_rate_perturbation_factory(
+        sim_config,
+        logger=sweep_logger,
+    )
     output_keys = _parse_output_keys(args.output_keys)
     if output_keys is None and args.lite_output:
         output_keys = ["spikes", "clusters"]
@@ -548,6 +593,7 @@ def main() -> int:
         save_dir=save_root,
         output_keys=output_keys,
         compile_net=args.compile,
+        log_level=args.log_level,
     )
     processor_factory = create_processor_factory()
     batch_processor_factory = SNNBatchProcessorFactory(

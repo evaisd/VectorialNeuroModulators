@@ -55,9 +55,36 @@ class _Stager(ABC):
 
         # Extract perturbations from kwargs, then merge with config-based perturbations
         kwargs_perturbations = self._extract_perturbations(kwargs)
+        if kwargs_perturbations:
+            summary = {
+                key: self._summarize_perturbation(value)
+                for key, value in kwargs_perturbations.items()
+            }
+        else:
+            summary = {}
+        self.logger.debug(f"Kwargs perturbations: {summary}")
         config_perturbations = self._generate_perturbations_from_config()
+        if config_perturbations:
+            summary = {
+                key: self._summarize_perturbation(value)
+                for key, value in config_perturbations.items()
+            }
+        else:
+            summary = {}
+        self.logger.debug(f"Config perturbations: {summary}")
         # kwargs perturbations override config perturbations
         self._init_perturbations = {**config_perturbations, **kwargs_perturbations}
+        if self._init_perturbations:
+            summary = {
+                key: self._summarize_perturbation(value)
+                for key, value in self._init_perturbations.items()
+            }
+        else:
+            summary = {}
+        self.logger.debug(
+            "Init perturbations (config + kwargs override): "
+            f"{summary}"
+        )
 
         self._apply_arousal_perturbations(self._init_perturbations)
         self._validate_arousal_level()
@@ -121,6 +148,16 @@ class _Stager(ABC):
         n_clusters = clusters_params["n_clusters"]
         j_baseline_perturbation = kwargs.get('j_baseline_perturbation')
         j_potentiated_perturbation = kwargs.get('j_potentiated_perturbation')
+        if j_baseline_perturbation is not None:
+            self.logger.debug(
+                "Applying j_baseline perturbation: "
+                f"{self._summarize_perturbation(j_baseline_perturbation)}"
+            )
+        if j_potentiated_perturbation is not None:
+            self.logger.debug(
+                "Applying j_potentiated perturbation: "
+                f"{self._summarize_perturbation(j_potentiated_perturbation)}"
+            )
         j = self._apply_matrix_perturbation(j, j_baseline_perturbation, as_delta=True)
         j = self._apply_potentiated_perturbation(j, j_potentiated_perturbation, n_clusters, as_delta=True)
         j_perturbation = kwargs.get('j_perturbation')
@@ -163,6 +200,30 @@ class _Stager(ABC):
                 perturbations[key[:-len(suffix)]] = kwargs.pop(key)
         return perturbations
 
+    @staticmethod
+    def _summarize_perturbation(value) -> str:
+        if value is None:
+            return "None"
+        try:
+            arr = np.asarray(value, dtype=float)
+        except Exception as exc:
+            return f"unserializable ({exc})"
+        shape = arr.shape
+        dtype = arr.dtype
+        if arr.size == 0:
+            return f"shape={shape} dtype={dtype} empty"
+        return (
+            "shape={shape} dtype={dtype} min={min_val:.6g} mean={mean_val:.6g} "
+            "max={max_val:.6g} std={std_val:.6g}"
+        ).format(
+            shape=shape,
+            dtype=dtype,
+            min_val=float(np.min(arr)),
+            mean_val=float(np.mean(arr)),
+            max_val=float(np.max(arr)),
+            std_val=float(np.std(arr)),
+        )
+
     def _generate_perturbations_from_config(self) -> dict:
         """Generate perturbation arrays from the YAML config.
 
@@ -198,8 +259,7 @@ class _Stager(ABC):
             perturbations[name] = values
 
             self.logger.debug(
-                f"Perturbation {name}: shape={np.asarray(values).shape} "
-                f"mean={np.mean(values):.4f}"
+                f"Perturbation {name}: {self._summarize_perturbation(values)}"
             )
 
         return perturbations
