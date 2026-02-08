@@ -5,3 +5,4 @@ torch @ index-url https://download.pytorch.org/whl/cpu
 PyYAML>=6.0.3
 pandas
 seaborn
+pyarrow
