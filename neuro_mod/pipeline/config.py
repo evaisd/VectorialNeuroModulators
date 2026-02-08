@@ -48,6 +48,14 @@ class PipelineConfig:
         save_analysis: Whether to save analysis results.
         save_plots: Whether to save plot files.
         save_compressed: Whether to compress saved raw spike arrays.
+        save_dataframes: Whether to save analysis dataframes via save_result.
+        save_metrics: Whether to save metrics via save_result.
+        analysis_dataframe_policy: Which analysis dataframes to persist ("all", "base",
+            "aggregated_only", "none").
+        analysis_artifacts_pickles: Whether to write analysis artifacts as pickles.
+        dataframe_compression: Parquet compression for saved dataframes.
+        dataframe_float_precision: Float precision for saved dataframes ("float32" or "float64").
+        cleanup_raw_after_processing: Remove raw spike files after processing when save_raw is False.
         run_processing: Whether to run the processing phase.
         run_analysis: Whether to run the analysis phase.
         run_plotting: Whether to run the plotting phase.
@@ -78,9 +86,16 @@ class PipelineConfig:
     save_dir: Path | None = None
     save_raw: bool = False
     save_processed: bool = True
-    save_analysis: bool = True
+    save_analysis: bool = False
     save_plots: bool = True
     save_compressed: bool = True
+    save_dataframes: bool = False
+    save_metrics: bool = False
+    analysis_dataframe_policy: str = "none"
+    analysis_artifacts_pickles: bool = False
+    dataframe_compression: str = "zstd"
+    dataframe_float_precision: str = "float32"
+    cleanup_raw_after_processing: bool = True
 
     # Phase toggles
     run_processing: bool = True
@@ -106,6 +121,8 @@ class PipelineConfig:
                 raise ValueError(
                     "sweep_param and sweep_values are required for SWEEP modes"
                 )
+        if self.mode is ExecutionMode.SWEEP_REPEATED and self.analysis_dataframe_policy == "none":
+            self.analysis_dataframe_policy = "aggregated_only"
 
         if self.save_dir is not None:
             self.save_dir = Path(self.save_dir)
@@ -116,6 +133,21 @@ class PipelineConfig:
         if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
             raise ValueError(
                 f"log_level must be DEBUG/INFO/WARNING/ERROR, got {self.log_level!r}"
+            )
+
+        if self.analysis_dataframe_policy not in ("all", "base", "aggregated_only", "none"):
+            raise ValueError(
+                "analysis_dataframe_policy must be one of: all, base, aggregated_only, none"
+            )
+
+        if self.dataframe_float_precision not in ("float32", "float64"):
+            raise ValueError(
+                "dataframe_float_precision must be 'float32' or 'float64'"
+            )
+
+        if self.dataframe_compression not in ("zstd", "gzip", "snappy", "none"):
+            raise ValueError(
+                "dataframe_compression must be one of: zstd, gzip, snappy, none"
             )
 
         # Repeated and sweep+repeated modes require save_dir for disk-based processing
@@ -153,6 +185,13 @@ class PipelineConfig:
             "save_analysis": self.save_analysis,
             "save_plots": self.save_plots,
             "save_compressed": self.save_compressed,
+            "save_dataframes": self.save_dataframes,
+            "save_metrics": self.save_metrics,
+            "analysis_dataframe_policy": self.analysis_dataframe_policy,
+            "analysis_artifacts_pickles": self.analysis_artifacts_pickles,
+            "dataframe_compression": self.dataframe_compression,
+            "dataframe_float_precision": self.dataframe_float_precision,
+            "cleanup_raw_after_processing": self.cleanup_raw_after_processing,
             "run_processing": self.run_processing,
             "run_analysis": self.run_analysis,
             "run_plotting": self.run_plotting,

@@ -157,8 +157,15 @@ config = PipelineConfig(
     save_dir=Path("experiments/run_001"),
     save_raw=False,          # Raw simulation outputs
     save_processed=True,     # Processed data
-    save_analysis=True,      # DataFrames and metrics
+    save_analysis=False,     # Analysis pickles (gated by analysis_artifacts_pickles)
     save_plots=True,
+    save_dataframes=False,   # Persist dataframes to disk (via save_result)
+    save_metrics=False,      # Persist metrics to disk (via save_result)
+    analysis_dataframe_policy="none",  # all | base | aggregated_only | none
+    analysis_artifacts_pickles=False,  # Write analysis pickles in /analysis
+    dataframe_compression="zstd",
+    dataframe_float_precision="float32",
+    cleanup_raw_after_processing=True,
 
     # Phase toggles
     run_processing=True,
@@ -168,6 +175,26 @@ config = PipelineConfig(
     # Logging
     log_level="INFO",
     log_to_file=True,
+)
+```
+
+Note: in `SWEEP_REPEATED` mode, the default `analysis_dataframe_policy` is promoted to
+`"aggregated_only"` to avoid per-sweep dataframe persistence unless explicitly set.
+
+### Minimal Storage Recipe
+
+For recomputable runs without raw spikes:
+
+```python
+config = PipelineConfig(
+    save_dir=Path("experiments/run_001"),
+    save_raw=False,
+    save_processed=True,     # Keep processed data for analyzer recompute
+    save_dataframes=False,
+    save_metrics=False,
+    analysis_artifacts_pickles=False,
+    dataframe_compression="zstd",
+    dataframe_float_precision="float32",
 )
 ```
 
@@ -210,8 +237,8 @@ result.metrics["aggregated"]
 # Time evolution data (if analyzer provides it)
 result.dataframes["aggregated_time"]
 
-# Transition matrices (aligned across runs; identity labels)
-result.dataframes["repeat_0_tpm"]
+# Transition matrices (compute on demand via analyzer; not stored by default)
+result.analyzers["repeat_0"].transitions_matrix(labels="identity")
 
 # Metadata
 result.seeds_used              # List of seeds used

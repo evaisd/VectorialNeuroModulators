@@ -269,8 +269,6 @@ class Pipeline(Generic[TRaw, TProcessed]):
         result.duration_seconds = time.time() - start_time
         self.logger.info(f"Pipeline complete in {result.duration_seconds:.2f}s")
 
-        self._align_transition_matrices(result)
-
         # Save results if save_dir specified
         if config.save_dir:
             self._save_results(config, result)
@@ -314,8 +312,6 @@ class Pipeline(Generic[TRaw, TProcessed]):
         result.duration_seconds = time.time() - start_time
         self.logger.info(f"Processing complete in {result.duration_seconds:.2f}s")
 
-        self._align_transition_matrices(result)
-
         if config.save_dir:
             self._save_results(config, result)
 
@@ -341,6 +337,22 @@ class Pipeline(Generic[TRaw, TProcessed]):
             if sys.platform == "darwin":
                 max_rss_mb = usage.ru_maxrss / (1024 * 1024)
             self.logger.info(f"[Memory] {context}: MaxRSS={max_rss_mb:.1f}MB")
+
+    def _cleanup_raw_files(self, config: PipelineConfig, keys: list[str]) -> None:
+        """Remove persisted raw outputs after processing if configured."""
+        if not (config.cleanup_raw_after_processing and config.save_dir):
+            return
+        if config.save_raw:
+            return
+        data_dir = config.save_dir / "data"
+        if not data_dir.exists():
+            return
+        suffixes = ("_spikes.npz", "_spikes.npy", "_raw.npy", "_raw.pkl")
+        for key in keys:
+            for suffix in suffixes:
+                path = data_dir / f"{key}{suffix}"
+                if path.exists():
+                    path.unlink()
 
     def _get_analysis_dir(self, config: PipelineConfig) -> Path:
         """Get the analysis directory."""
@@ -391,7 +403,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
         key: str,
     ) -> None:
         """Persist analysis outputs for a run key."""
-        if not (config.save_analysis and config.save_dir):
+        if not (config.save_analysis and config.save_dir and config.analysis_artifacts_pickles):
             return
         self._save_dataframe(result.dataframes[key], config, "dataframe")
         self._save_metrics(result.metrics[key], config)
@@ -401,9 +413,6 @@ class Pipeline(Generic[TRaw, TProcessed]):
             self._save_dataframe(result.dataframes[per_attr_key], config, "per_attractor")
         if time_key in result.dataframes:
             self._save_dataframe(result.dataframes[time_key], config, "time_evolution")
-        tpm_key = f"{key}_tpm"
-        if tpm_key in result.dataframes:
-            self._save_dataframe(result.dataframes[tpm_key], config, "tpm")
 
     def _setup_logging(self, config: PipelineConfig) -> None:
         """Configure logging based on config."""
@@ -536,6 +545,7 @@ class Pipeline(Generic[TRaw, TProcessed]):
             config, result, raw_refs, metadata, key="aggregated"
         )
         self._log_memory_usage(config, "After unified processing")
+        self._cleanup_raw_files(config, [f"repeat_{i}" for i in range(n_total)])
 
         if config.run_plotting:
             self._generate_plots(config, result, "aggregated", analyzer)
@@ -883,6 +893,10 @@ class Pipeline(Generic[TRaw, TProcessed]):
                 sweep_value=value,
             )
             self._log_memory_usage(config, f"After processing sweep {i + 1}")
+            self._cleanup_raw_files(
+                config,
+                [f"sweep_{i}_repeat_{j}" for j in range(n_repeats)],
+            )
             if config.run_plotting:
                 self._generate_plots(config, result, f"sweep_{i}", analyzer)
 
@@ -982,7 +996,9 @@ class Pipeline(Generic[TRaw, TProcessed]):
         else:
             result.processed_data[key] = processed
 
-        return self._analyze_and_store(config, result, processed, processor, key)
+        analyzer = self._analyze_and_store(config, result, processed, processor, key)
+        self._cleanup_raw_files(config, [key])
+        return analyzer
 
     def _analyze_and_store(
         self,
@@ -1030,10 +1046,6 @@ class Pipeline(Generic[TRaw, TProcessed]):
                 )
                 if not time_df.empty:
                     result.dataframes[f"{key}_time"] = time_df
-            if "transitions" in manipulations:
-                tpm = analyzer.manipulation("transitions")
-                if not tpm.empty:
-                    result.dataframes[f"{key}_tpm"] = tpm
         else:
             if hasattr(analyzer, "get_per_attractor_dataframe"):
                 per_attr_df = analyzer.get_per_attractor_dataframe()
@@ -1047,11 +1059,6 @@ class Pipeline(Generic[TRaw, TProcessed]):
                     )
                     if not time_df.empty:
                         result.dataframes[f"{key}_time"] = time_df
-
-            if hasattr(analyzer, "get_transition_matrix"):
-                tpm = pd.DataFrame(analyzer.get_transition_matrix())
-                if not tpm.empty:
-                    result.dataframes[f"{key}_tpm"] = tpm
 
         self._save_analysis_artifacts(config, result, key)
         if self.logger.isEnabledFor(logging.DEBUG):
@@ -1316,25 +1323,11 @@ class Pipeline(Generic[TRaw, TProcessed]):
             return base / key
         return base
 
-    def _align_transition_matrices(self, result: PipelineResult) -> None:
-        """Align transition matrices across runs and store in result.dataframes."""
-        if not hasattr(result, "align_transition_matrices"):
-            return
-        try:
-            canonical_labels, aligned = result.align_transition_matrices(labels="identity")
-        except Exception as exc:
-            self.logger.warning(f"Failed to align transition matrices: {exc}")
-            return
-        if not aligned:
-            return
-        for key, tpm in aligned.items():
-            result.dataframes[f"{key}_tpm"] = tpm
-
     def _save_results(self, config: PipelineConfig, result: PipelineResult) -> None:
         """Save pipeline results to disk."""
         assert config.save_dir is not None
         self.logger.info(f"Saving results to {config.save_dir}")
-        save_result(result, config.save_dir)
+        save_result(result, config.save_dir, config=config)
 
     def _report_progress(
         self,

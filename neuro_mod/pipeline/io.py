@@ -108,7 +108,14 @@ def load_metadata(save_dir: Path) -> dict[str, Any]:
         return json.load(f)
 
 
-def save_dataframe(df: pd.DataFrame, path: Path, name: str) -> None:
+def save_dataframe(
+    df: pd.DataFrame,
+    path: Path,
+    name: str,
+    *,
+    compression: str = "zstd",
+    float_precision: str = "float32",
+) -> None:
     """Save a DataFrame to parquet format (or CSV as fallback).
 
     Args:
@@ -117,11 +124,22 @@ def save_dataframe(df: pd.DataFrame, path: Path, name: str) -> None:
         name: Name for the file (without extension).
     """
     path.mkdir(parents=True, exist_ok=True)
+    df_to_save = df.copy()
+    if float_precision in ("float32", "float64"):
+        float_cols = df_to_save.select_dtypes(include=["float"]).columns
+        if len(float_cols) > 0:
+            df_to_save[float_cols] = df_to_save[float_cols].astype(float_precision)
+
+    compression_arg = None if compression == "none" else compression
     try:
-        df.to_parquet(path / f"{name}.parquet", index=False)
+        df_to_save.to_parquet(
+            path / f"{name}.parquet",
+            index=False,
+            compression=compression_arg,
+        )
     except ImportError:
         # Fall back to CSV if parquet engines not available
-        df.to_csv(path / f"{name}.csv", index=False)
+        df_to_save.to_csv(path / f"{name}.csv", index=False)
 
 
 def load_dataframe(path: Path, name: str) -> pd.DataFrame:
@@ -185,7 +203,28 @@ def load_metrics(path: Path, name: str) -> dict[str, Any]:
         return json.load(f)
 
 
-def save_result(result: Any, save_dir: Path) -> None:
+def _filter_dataframes(
+    dataframes: dict[str, pd.DataFrame],
+    policy: str,
+) -> dict[str, pd.DataFrame]:
+    if policy == "none":
+        return {}
+    if policy == "aggregated_only":
+        return {"aggregated": dataframes["aggregated"]} if "aggregated" in dataframes else {}
+    if policy == "base":
+        filtered: dict[str, pd.DataFrame] = {}
+        for name, df in dataframes.items():
+            if name == "aggregated":
+                filtered[name] = df
+                continue
+            if name.endswith(("_per_attractor", "_time", "_tpm")):
+                continue
+            filtered[name] = df
+        return filtered
+    return dataframes
+
+
+def save_result(result: Any, save_dir: Path, *, config: Any | None = None) -> None:
     """Save full PipelineResult to disk.
 
     Args:
@@ -207,15 +246,31 @@ def save_result(result: Any, save_dir: Path) -> None:
         duration_seconds=result.duration_seconds,
     )
 
+    effective_config = config if config is not None else getattr(result, "config", None)
+    save_dataframes = getattr(effective_config, "save_dataframes", True)
+    save_metrics_flag = getattr(effective_config, "save_metrics", True)
+    df_policy = getattr(effective_config, "analysis_dataframe_policy", "all")
+    df_compression = getattr(effective_config, "dataframe_compression", "zstd")
+    df_precision = getattr(effective_config, "dataframe_float_precision", "float32")
+
     # Save dataframes
-    df_dir = save_dir / "dataframes"
-    for name, df in result.dataframes.items():
-        save_dataframe(df, df_dir, name)
+    if save_dataframes:
+        df_dir = save_dir / "dataframes"
+        filtered = _filter_dataframes(result.dataframes, df_policy)
+        for name, df in filtered.items():
+            save_dataframe(
+                df,
+                df_dir,
+                name,
+                compression=df_compression,
+                float_precision=df_precision,
+            )
 
     # Save metrics
-    metrics_dir = save_dir / "metrics"
-    for name, metrics in result.metrics.items():
-        save_metrics(metrics, metrics_dir, name)
+    if save_metrics_flag:
+        metrics_dir = save_dir / "metrics"
+        for name, metrics in result.metrics.items():
+            save_metrics(metrics, metrics_dir, name)
 
 
 def load_result(save_dir: Path) -> dict[str, Any]:
