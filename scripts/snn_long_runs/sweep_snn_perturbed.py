@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Iterable
@@ -51,7 +52,7 @@ from neuro_mod.pipeline import (
     save_sweep_summary,
     plot_sweep_summary,
 )
-from neuro_mod.visualization import folder_plots_to_pdf, image_to_pdf
+from neuro_mod.visualization import folder_plots_to_pdf
 
 from run_snn import create_plotter, _ExpSNNAnalyzer, load_seeds_from_file
 
@@ -145,7 +146,12 @@ class SweepSimulatorFactory:
             **stager_kwargs,
         )
         if self.raster_plots:
-            return _RasterPlotRunner(stager, seed, self.save_dir, sweep_label)
+            raster_dir = self.save_dir / "plots" / "rasters"
+            already_rastered = raster_dir.exists() and any(
+                raster_dir.glob(f"spikes_{sweep_label}_*.png")
+            )
+            if not already_rastered:
+                return _RasterPlotRunner(stager, seed, self.save_dir, sweep_label)
         return stager
 
 
@@ -328,11 +334,6 @@ class _RasterPlotRunner:
             filename = f"spikes_{self._sweep_label}_seed_{self._seed}.png"
             png_path = plot_dir / filename
             self._stager._plot(spikes, plt_path=png_path)
-            pdf_path = png_path.with_suffix(".pdf")
-            try:
-                image_to_pdf(png_path, pdf_path)
-            except Exception as exc:
-                print(f"Warning: failed to create rasterized PDF {pdf_path}: {exc}")
         return outputs
 
 
@@ -587,6 +588,21 @@ def _maybe_write_sweep_config(
     _write_sweep_config(base_config, params, out_path, target=target)
 
 
+_RAW_SUFFIXES = ("_spikes.npz", "_spikes.npy", "_raw.npy", "_raw.pkl")
+_SWEEP_REPEAT_RE = re.compile(r"^sweep_\d+_repeat_(\d+)")
+
+
+def _prune_raw_to_first_repeat(save_dir: Path) -> None:
+    """Delete raw files for repeat > 0, keeping only one raw file per sweep value."""
+    data_dir = save_dir / "data"
+    if not data_dir.exists():
+        return
+    for path in data_dir.iterdir():
+        m = _SWEEP_REPEAT_RE.match(path.name)
+        if m and int(m.group(1)) > 0:
+            path.unlink()
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[2]
     args = _build_parser(root).parse_args()
@@ -723,6 +739,8 @@ def main() -> int:
         raw_data_dir = save_root / "data"
         if raw_data_dir.exists():
             shutil.rmtree(raw_data_dir)
+    elif args.n_repeats > 1:
+        _prune_raw_to_first_repeat(save_root)
 
     print(
         f"Sweep completed in {result.duration_seconds:.2f}s."
