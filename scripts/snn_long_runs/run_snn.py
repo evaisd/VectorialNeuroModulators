@@ -587,7 +587,7 @@ def load_existing_data(save_dir: Path) -> tuple[list[dict[str, Any]], list[dict[
 
 
 def main() -> int:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     args = _build_parser(root).parse_args()
 
     _apply_style(args.style, root)
