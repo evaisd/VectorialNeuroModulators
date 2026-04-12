@@ -10,7 +10,9 @@ Usage:
         --config-dir configs/capacity_experiment \\
         --save-dir simulations/capacity_validation \\
         --range 0 0.1 30 \\
-        --max-workers 16 \\
+        --n-repeats 1 \\
+        --parallel --executor process --max-workers 16 \\
+        --lite-output --no-plots --no-compress \\
         --skip-existing
     python scripts/snn_long_runs/run_capacity_validation.py --dry-run --M 4 5
 """
@@ -77,6 +79,7 @@ def _build_cmd(
         "--parallel",
         "--executor", executor,
         "--max-workers", str(max_workers),
+        "--lite-output",
         "--keep-raw",
         "--raster-plots",
         "--no-plots",
