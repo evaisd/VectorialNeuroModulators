@@ -2,7 +2,171 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
+import pandas as pd
+
+
+TRANSITION_EVENT_COLUMNS = [
+    "identity_a",
+    "attractor_idx_a",
+    "identity_b",
+    "attractor_idx_b",
+    "time",
+    "overlapping_clusters",
+    "num_clusters_a",
+    "num_clusters_b",
+    "num_overlapping_clusters",
+    "symmetry_class",
+    "transition_idx",
+    "occurrences",
+    "symmetry_class_occurrences",
+]
+
+
+def _identity_to_tuple(identity: Any) -> tuple[Any, ...]:
+    """Normalize an attractor identity to a tuple."""
+    if identity is None:
+        return tuple()
+    if isinstance(identity, tuple):
+        return identity
+    if isinstance(identity, list):
+        return tuple(identity)
+    if isinstance(identity, (set, frozenset)):
+        return tuple(sorted(identity))
+    if isinstance(identity, np.ndarray):
+        return tuple(identity.ravel().tolist())
+    if np.isscalar(identity):
+        if isinstance(identity, np.generic):
+            return (identity.item(),)
+        return (identity,)
+    try:
+        return tuple(identity)
+    except TypeError:
+        return (identity,)
+
+
+def _empty_transition_events_dataframe() -> pd.DataFrame:
+    """Return an empty transition-events DataFrame with fixed schema/dtypes."""
+    return pd.DataFrame(
+        {
+            "identity_a": pd.Series(dtype=object),
+            "attractor_idx_a": pd.Series(dtype="int64"),
+            "identity_b": pd.Series(dtype=object),
+            "attractor_idx_b": pd.Series(dtype="int64"),
+            "time": pd.Series(dtype="float64"),
+            "overlapping_clusters": pd.Series(dtype=object),
+            "num_clusters_a": pd.Series(dtype="int64"),
+            "num_clusters_b": pd.Series(dtype="int64"),
+            "num_overlapping_clusters": pd.Series(dtype="int64"),
+            "symmetry_class": pd.Series(dtype=object),
+            "transition_idx": pd.Series(dtype="int64"),
+            "occurrences": pd.Series(dtype="int64"),
+            "symmetry_class_occurrences": pd.Series(dtype="int64"),
+        },
+        columns=TRANSITION_EVENT_COLUMNS,
+    )
+
+
+def build_transition_events_dataframe(
+    occurrences_df: pd.DataFrame,
+    *,
+    session_end_times: list[float] | None = None,
+) -> pd.DataFrame:
+    """Build a directed event-level transitions DataFrame from occurrences.
+
+    Each row corresponds to a transition from occurrence i (A) to i+1 (B).
+    Boundary-crossing transitions are removed:
+      - if repeat metadata is present: only same-repeat transitions are kept;
+      - else if session_end_times are provided: only same-session transitions are kept.
+    """
+    if occurrences_df.empty or len(occurrences_df) < 2:
+        return _empty_transition_events_dataframe()
+
+    required = {"clusters", "attractor_idx", "t_start", "num_clusters"}
+    missing = required.difference(occurrences_df.columns)
+    if missing:
+        missing_text = ", ".join(sorted(missing))
+        raise ValueError(
+            f"occurrences_df is missing required columns for transitions: {missing_text}"
+        )
+
+    prev_rows = occurrences_df.iloc[:-1].reset_index(drop=True)
+    next_rows = occurrences_df.iloc[1:].reset_index(drop=True)
+    valid = np.ones(len(prev_rows), dtype=bool)
+
+    has_repeat = (
+        "repeat" in occurrences_df.columns
+        and occurrences_df["repeat"].notna().any()
+    )
+    if has_repeat:
+        repeat_prev = prev_rows["repeat"].to_numpy()
+        repeat_next = next_rows["repeat"].to_numpy()
+        valid &= repeat_prev == repeat_next
+    elif session_end_times:
+        times = occurrences_df["t_start"].to_numpy(dtype=float)
+        session_ids = _get_session_ids(times, session_end_times)
+        valid &= session_ids[:-1] == session_ids[1:]
+
+    if not valid.any():
+        return _empty_transition_events_dataframe()
+
+    prev_rows = prev_rows.loc[valid].reset_index(drop=True)
+    next_rows = next_rows.loc[valid].reset_index(drop=True)
+
+    identities_a = [_identity_to_tuple(identity) for identity in prev_rows["clusters"]]
+    identities_b = [_identity_to_tuple(identity) for identity in next_rows["clusters"]]
+    overlaps = [
+        tuple(sorted(set(identity_a).intersection(identity_b)))
+        for identity_a, identity_b in zip(identities_a, identities_b)
+    ]
+
+    num_overlap = np.fromiter(
+        (len(overlap) for overlap in overlaps),
+        dtype=np.int64,
+        count=len(overlaps),
+    )
+    num_a = prev_rows["num_clusters"].to_numpy(dtype=np.int64)
+    num_b = next_rows["num_clusters"].to_numpy(dtype=np.int64)
+
+    transition_df = pd.DataFrame(
+        {
+            "identity_a": identities_a,
+            "attractor_idx_a": prev_rows["attractor_idx"].to_numpy(dtype=np.int64),
+            "identity_b": identities_b,
+            "attractor_idx_b": next_rows["attractor_idx"].to_numpy(dtype=np.int64),
+            "time": next_rows["t_start"].to_numpy(dtype=float),
+            "overlapping_clusters": overlaps,
+            "num_clusters_a": num_a,
+            "num_clusters_b": num_b,
+            "num_overlapping_clusters": num_overlap,
+            "symmetry_class": list(zip(num_a.tolist(), num_b.tolist(), num_overlap.tolist())),
+        },
+        columns=TRANSITION_EVENT_COLUMNS[:-2],
+    )
+    pair_keys = list(
+        zip(
+            transition_df["attractor_idx_a"].to_numpy(dtype=np.int64),
+            transition_df["attractor_idx_b"].to_numpy(dtype=np.int64),
+        )
+    )
+    transition_df["transition_idx"] = pd.factorize(
+        pd.Series(pair_keys, dtype=object),
+        sort=False,
+    )[0].astype(np.int64)
+    transition_df["occurrences"] = (
+        transition_df.groupby("transition_idx").cumcount()
+        .add(1)
+        .astype(np.int64)
+    )
+    transition_df["symmetry_class_occurrences"] = (
+        transition_df.groupby("symmetry_class").cumcount()
+        .add(1)
+        .astype(np.int64)
+    )
+    transition_df = transition_df[TRANSITION_EVENT_COLUMNS]
+    return transition_df
 
 
 def get_ordered_occurrences(attractors_data: dict):

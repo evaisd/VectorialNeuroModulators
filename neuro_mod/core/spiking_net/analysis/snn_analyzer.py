@@ -49,6 +49,7 @@ class SNNAnalyzer(BaseAnalyzer):
         self._transition_matrix: np.ndarray | None = None
         self.processed_time_df = pd.DataFrame()
         self._df: pd.DataFrame | None = None
+        self._transition_df: pd.DataFrame | None = None
 
         # Extract config values
         self.dt = self._config.get("dt", 0.5e-3)
@@ -82,6 +83,13 @@ class SNNAnalyzer(BaseAnalyzer):
         if self._df is None:
             self._df = self._build_dataframe()
         return self._df
+
+    @property
+    def transition_df(self) -> pd.DataFrame:
+        """Directed event-level transition DataFrame for consecutive occurrences."""
+        if self._transition_df is None:
+            self._transition_df = self._build_transition_dataframe(self.df)
+        return self._transition_df
 
     @reader("attractors_data")
     def _build_dataframe(self) -> pd.DataFrame:
@@ -269,6 +277,19 @@ class SNNAnalyzer(BaseAnalyzer):
         if min_duration is not None:
             df = df[df["duration"] >= min_duration]
         return df.copy()
+
+    @manipulation("transition_events")
+    def transition_events(
+        self,
+        *,
+        t_from: float | None = None,
+        t_to: float | None = None,
+        min_duration: float | None = None,
+    ) -> pd.DataFrame:
+        if t_from is None and t_to is None and min_duration is None:
+            return self.transition_df
+        filtered_df = self.filtered(t_from=t_from, t_to=t_to, min_duration=min_duration)
+        return self._build_transition_dataframe(filtered_df)
 
     # --- Metrics ---
 
@@ -775,6 +796,14 @@ class SNNAnalyzer(BaseAnalyzer):
         if not self.session_lengths_steps:
             return []
         return helpers.get_session_end_times_s(self.session_lengths_steps, self.dt)
+
+    def _build_transition_dataframe(self, occurrences_df: pd.DataFrame) -> pd.DataFrame:
+        """Build directed transition events from an occurrence-level DataFrame."""
+        session_end_times = self._get_session_end_times_s()
+        return transitions.build_transition_events_dataframe(
+            occurrences_df,
+            session_end_times=session_end_times if session_end_times else None,
+        )
 
     def _get_attractor_indices_in_order(
         self,
