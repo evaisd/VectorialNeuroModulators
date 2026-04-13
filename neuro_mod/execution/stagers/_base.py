@@ -192,6 +192,16 @@ class _Stager(ABC):
         z = self.rng.beta(10, 10, size=[self.n_neurons])
         return M * z / self.arousal_denom
 
+    def _get_arousal_nu_batch(self, T: int) -> np.ndarray:
+        """Generate arousal noise for all T timesteps at once.
+
+        Returns:
+            Array of shape ``(T, n_neurons)``.
+        """
+        M = self.arousal_params["M"]
+        z = self.rng.beta(10, 10, size=(T, self.n_neurons))
+        return M * z / self.arousal_denom
+
     def _get_arousal_jee(self):
         L = self.arousal_params["L"]
         return L / self.arousal_denom

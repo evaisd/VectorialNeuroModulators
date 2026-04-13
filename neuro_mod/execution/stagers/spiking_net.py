@@ -179,6 +179,29 @@ class StageSNNSimulation(_Stager):
             )
         )
 
+    def _generate_currents_batch(self, rate_perturbation: np.ndarray) -> torch.Tensor:
+        """Pre-generate external currents for all timesteps in one vectorised call.
+
+        Args:
+            rate_perturbation: Array of shape ``(T, n_pops)`` containing the
+                per-cluster rate perturbation for every timestep.
+
+        Returns:
+            Tensor of shape ``(T, 4, n_neurons)`` ready to pass to
+            ``LIFNet.forward()`` as ``external_currents``.
+        """
+        T = rate_perturbation.shape[0]
+        n_perturbations_batch = self._get_arousal_nu_batch(T)
+        baseline_rates = np.array(
+            self.external_currents_params["nu_ext_baseline"], dtype=np.float64
+        )
+        currents_np = self.current_generator.generate_currents_batch(
+            baseline_rates=baseline_rates,
+            c_perturbations=rate_perturbation,
+            n_perturbations_batch=n_perturbations_batch,
+        )
+        return torch.from_numpy(currents_np)
+
     @staticmethod
     def _get_stimulus_generator():
         return external.StimulusGenerator()
@@ -269,7 +292,7 @@ class StageSNNSimulation(_Stager):
             f"perturbations:rate:{rate_source}:{summary}",
             f"Rate perturbation source={rate_source} summary={summary}"
         )
-        external_currents = (self._generate_currents(c) for c in rate_perturbation)
+        external_currents = self._generate_currents_batch(rate_perturbation)
         voltage = torch.zeros(self.n_neurons, dtype=torch.float64)
         current = torch.zeros(self.n_neurons, dtype=torch.float64)
 

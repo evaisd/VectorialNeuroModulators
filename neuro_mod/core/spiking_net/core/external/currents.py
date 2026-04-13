@@ -163,3 +163,49 @@ class CurrentGenerator:
         full_output[0] = np.concatenate(poisson[0], axis=0)
         full_output[1] = np.concatenate(poisson[1], axis=0)
         return full_output
+
+    def generate_currents_batch(
+            self,
+            baseline_rates: np.ndarray,         # shape (4,)
+            c_perturbations: np.ndarray,         # shape (T, n_clusters) or (n_clusters,)
+            n_perturbations_batch: np.ndarray,   # shape (T, n_neurons)
+    ) -> np.ndarray:
+        """Generate external currents for all T timesteps in one vectorised call.
+
+        Replaces calling ``generate_currents`` in a per-step loop.  Instead of
+        4.56 M small ``rng.poisson`` calls, this issues 76 batch calls of shape
+        ``(T, cluster_size)``, which NumPy/PCG can handle ~100× faster.
+
+        Args:
+            baseline_rates: Baseline input rates, length 4.
+            c_perturbations: Per-cluster rate perturbations.  Either ``(n_clusters,)``
+                for a constant perturbation or ``(T, n_clusters)`` for time-varying.
+            n_perturbations_batch: Per-neuron arousal noise for every timestep,
+                shape ``(T, n_neurons)``.
+
+        Returns:
+            Array of shape ``(T, 4, n_neurons)`` containing external currents.
+        """
+        baseline = self._project_to_cluster_space(baseline_rates)  # (2, n_clusters)
+        c_perturbations = np.asarray(c_perturbations, dtype=float)
+        if c_perturbations.ndim == 1:
+            c_perturbations = c_perturbations[np.newaxis, :]  # (1, n_clusters) broadcasts over T
+
+        T = n_perturbations_batch.shape[0]
+        output = np.zeros((T, 4, self.n_neurons))
+
+        for i in range(2):  # EE, EI populations
+            for j, (left, right) in enumerate(
+                zip(self.cluster_vec[:-1], self.cluster_vec[1:])
+            ):
+                size = int(right - left)
+                base_rate = baseline[i, j]
+                c = self.c_ext[i, j]
+                c_pert = c_perturbations[:, j]               # (T,) or (1,)
+                n_pert = n_perturbations_batch[:, left:right] # (T, size)
+                rate = (base_rate + n_pert + c_pert[:, np.newaxis]) * c * self.delta_t
+                output[:, i, left:right] = self._gen(
+                    np.maximum(rate, 0.0), (T, size)
+                )
+
+        return output

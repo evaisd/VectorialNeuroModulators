@@ -142,20 +142,20 @@ class LIFNet(nn.Module):
         if external_currents is None:
             external_currents = torch.zeros_like(stimulus)
 
-        v_history, c_history, s_history = [], [], []
-        for stim, c in zip(stimulus, external_currents):
+        T = stimulus.shape[0]
+        v_history = torch.empty(T, self.n_neurons, dtype=voltage.dtype, device=voltage.device)
+        c_history = torch.empty(T, self.n_neurons, dtype=synaptic_current.dtype, device=voltage.device)
+        s_history = torch.empty(T, self.n_neurons, dtype=voltage.dtype, device=voltage.device)
+        for t, (stim, c) in enumerate(zip(stimulus, external_currents)):
             voltage, synaptic_current, s = self._step(voltage,
                                                       synaptic_current,
                                                       stim,
                                                       c,
                                                       mechanism)
-            v_history.append(voltage.clone())
-            c_history.append(synaptic_current.clone())
-            s_history.append(s.clone())
-        return (torch.stack(v_history),
-                torch.stack(c_history),
-                torch.stack(s_history)
-                )
+            v_history[t] = voltage
+            c_history[t] = synaptic_current
+            s_history[t] = s.float()
+        return v_history, c_history, s_history
 
     @torch.no_grad()
     def _step(self, voltage,
