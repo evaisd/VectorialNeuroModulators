@@ -10,6 +10,7 @@ from neuro_mod.analysis.capacity.sdp import (
 )
 from neuro_mod.analysis.capacity.sensitivity import (
     build_G_matrix,
+    load_attractors_from_npy,
     load_sweep_probabilities,
     predict_probabilities_from_G,
     validate_linearity,
@@ -34,6 +35,7 @@ __all__ = [
     "solve_subspace_sdp",
     # sensitivity
     "build_G_matrix",
+    "load_attractors_from_npy",
     "load_sweep_probabilities",
     "predict_probabilities_from_G",
     "validate_linearity",

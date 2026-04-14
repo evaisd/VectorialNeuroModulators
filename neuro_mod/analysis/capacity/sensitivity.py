@@ -114,6 +114,96 @@ def load_sweep_probabilities(
 
 
 # ---------------------------------------------------------------------------
+# Loader for attractors.npy pipeline output
+# ---------------------------------------------------------------------------
+
+def load_attractors_from_npy(
+    exp_dir: Path | str,
+    k_filter: int | None = None,
+    min_occurrences: int = 5,
+) -> tuple[list[tuple[int, ...]], np.ndarray, dict]:
+    """Load attractor landscape from the processed/sweep_0/ pipeline output.
+
+    Reads the ``attractors.npy`` dict produced by the SNN batch processor and
+    estimates steady-state probabilities as:
+
+        p(S) = counts(S) * mean_lifespan_ms / total_duration_ms
+
+    where ``mean_lifespan_ms`` is taken from ``dataframes/sweep_summary.parquet``
+    if available, otherwise approximated as
+    ``total_duration_ms / total_occurrences``.
+
+    Args:
+        exp_dir: Path to a single experiment directory (one M / target pair),
+            e.g. ``simulations/capacity_validation/M1/0_6_12``.
+        k_filter: If given, retain only attractors with exactly k active
+            clusters (e.g. k_filter=3 for 3-hot attractors).
+        min_occurrences: Drop attractors seen fewer than this many times.
+
+    Returns:
+        attractor_tuples: List of attractor identity tuples.
+        probabilities:    ndarray of p(S) estimates aligned to attractor_tuples.
+        meta:             Dict with keys ``total_duration_ms``, ``n_runs``,
+                          ``mean_lifespan_ms``, ``total_occurrences``.
+
+    Raises:
+        FileNotFoundError: If ``processed/sweep_0/attractors.npy`` or
+            ``processed/sweep_0/processor_config.json`` are missing.
+    """
+    import json
+
+    exp_dir = Path(exp_dir)
+    npy_path = exp_dir / "processed" / "sweep_0" / "attractors.npy"
+    cfg_path = exp_dir / "processed" / "sweep_0" / "processor_config.json"
+
+    if not npy_path.exists():
+        raise FileNotFoundError(f"attractors.npy not found: {npy_path}")
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"processor_config.json not found: {cfg_path}")
+
+    att_dict = np.load(npy_path, allow_pickle=True).item()
+
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    total_duration_ms: float = float(cfg["total_duration_ms"])
+    n_runs: int = int(cfg["n_runs"])
+
+    # Count occurrences across all attractors
+    all_counts = {tup: int(info["#"]) for tup, info in att_dict.items()}
+    total_occurrences = sum(all_counts.values())
+
+    # Prefer parquet-derived mean lifespan; fall back to global estimate
+    parquet_path = exp_dir / "dataframes" / "sweep_summary.parquet"
+    if parquet_path.exists():
+        summary = pd.read_parquet(parquet_path)
+        mean_lifespan_ms = float(summary["mean_lifespan_ms"].iloc[0])
+    else:
+        mean_lifespan_ms = total_duration_ms / total_occurrences if total_occurrences > 0 else 1.0
+
+    meta = {
+        "total_duration_ms": total_duration_ms,
+        "n_runs": n_runs,
+        "mean_lifespan_ms": mean_lifespan_ms,
+        "total_occurrences": total_occurrences,
+    }
+
+    # Build filtered lists
+    attractor_tuples: list[tuple[int, ...]] = []
+    probabilities: list[float] = []
+
+    for tup, count in all_counts.items():
+        if count < min_occurrences:
+            continue
+        if k_filter is not None and len(tup) != k_filter:
+            continue
+        p = count * mean_lifespan_ms / total_duration_ms
+        attractor_tuples.append(tup)
+        probabilities.append(p)
+
+    return attractor_tuples, np.array(probabilities, dtype=np.float64), meta
+
+
+# ---------------------------------------------------------------------------
 # Sensitivity matrix
 # ---------------------------------------------------------------------------
 
