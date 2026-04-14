@@ -2,15 +2,15 @@
 """Setup script for the capacity validation experiment.
 
 Generates:
-  1. A theoretical attractor vocabulary (30 k-hot attractors).
+  1. A theoretical attractor vocabulary (default: 12-attractor minimal saturating set).
   2. SDP optimal projections Π*(M) for M ∈ {4, …, 12}.
   3. Targeting directions δ*_{S0,M} for every (M, S0) pair.
   4. One validation YAML config per (M, S0) pair.
   5. A self-contained output bundle (npz + json).
 
 Usage:
-    python run_capacity_experiment.py                     # defaults
-    python run_capacity_experiment.py --n-vocab 12        # minimal saturating set only
+    python run_capacity_experiment.py                     # minimal saturating set (12 attractors)
+    python run_capacity_experiment.py --n-vocab 30        # extended 30-attractor vocabulary
     python run_capacity_experiment.py --out-dir outputs/capacity_setup
 """
 
@@ -32,17 +32,23 @@ sys.path.insert(0, str(ROOT))
 # 1. Vocabulary
 # ---------------------------------------------------------------------------
 
-def build_vocabulary(n: int = 30, C: int = 18, k: int = 3) -> list[tuple[int, ...]]:
+def build_vocabulary(
+    n: int = 30,
+    C: int = 18,
+    k: int = 3,
+    seed: set[tuple[int, ...]] | None = None,
+) -> list[tuple[int, ...]]:
     """Return n distinct k-hot attractor tuples (theoretical construction).
 
     Strategy:
+      - Start from seed (if given), then add:
       - k cyclic-shift partitions of [0..C-1] into k-groups → k × (C // k) attractors.
       - Equidistant step-C//k patterns → C // k more.
       - Fill remaining slots from lexicographic combinations.
 
-    For C=18, k=3: 18 + 6 = 24 structured, then 6 from combinations → 30.
+    For C=18, k=3 (no seed): 18 + 6 = 24 structured, then 6 from combinations → 30.
     """
-    vocab: set[tuple[int, ...]] = set()
+    vocab: set[tuple[int, ...]] = set(seed) if seed is not None else set()
     clusters = list(range(C))
 
     for shift in range(k):
@@ -63,6 +69,27 @@ def build_vocabulary(n: int = 30, C: int = 18, k: int = 3) -> list[tuple[int, ..
         vocab.add(combo)
 
     return sorted(vocab)[:n]
+
+
+def build_saturating_vocabulary(C: int = 18, k: int = 3) -> list[tuple[int, ...]]:
+    """Return the minimal saturating vocabulary: two disjoint partitions of [0..C-1] into k-groups.
+
+    Produces 2 * (C // k) attractors. For C=18, k=3: 12 attractors.
+    Requires C divisible by k.
+
+    Partition A — consecutive blocks:      (0,1,2), (3,4,5), …
+    Partition B — cyclic shift by 1:  (1,2,3), (4,5,6), …, (C-1,0,1)
+
+    Adjacent groups across partitions share exactly k-1 clusters (|S △ S'| = 2),
+    producing the bottleneck pairs that saturate the SDP constraints.
+    """
+    if C % k != 0:
+        raise ValueError(f"C={C} must be divisible by k={k} for saturating construction")
+    clusters = list(range(C))
+    shifted = clusters[1:] + clusters[:1]
+    partition_a = [tuple(clusters[i:i + k]) for i in range(0, C, k)]
+    partition_b = [tuple(sorted(shifted[i:i + k])) for i in range(0, C, k)]
+    return sorted(set(partition_a + partition_b))
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +254,13 @@ def parse_args() -> argparse.Namespace:
         default="outputs/capacity_setup",
         help="Directory for SDP outputs (npz + json).",
     )
-    parser.add_argument("--n-vocab", type=int, default=30, help="Vocabulary size.")
+    parser.add_argument(
+        "--n-vocab",
+        type=int,
+        default=None,
+        help="Vocabulary size for extended construction. "
+             "Omit to use the minimal saturating set (2*(C//k) attractors).",
+    )
     parser.add_argument("--C", type=int, default=18, help="Number of clusters.")
     parser.add_argument("--k", type=int, default=3, help="Active clusters per attractor.")
     parser.add_argument("--M-min", type=int, default=4, help="Minimum M (modes).")
@@ -243,7 +276,11 @@ def main() -> None:
     config_dir = ROOT / args.config_dir
     out_dir = ROOT / args.out_dir
 
-    vocabulary = build_vocabulary(n=args.n_vocab, C=args.C, k=args.k)
+    saturating = build_saturating_vocabulary(C=args.C, k=args.k)
+    if args.n_vocab is None:
+        vocabulary = saturating
+    else:
+        vocabulary = build_vocabulary(n=args.n_vocab, C=args.C, k=args.k, seed=set(saturating))
     print(f"Vocabulary: {len(vocabulary)} attractors")
 
     sdp_results = run_sdp(vocabulary, M_range=M_range, C=args.C, k=args.k)
