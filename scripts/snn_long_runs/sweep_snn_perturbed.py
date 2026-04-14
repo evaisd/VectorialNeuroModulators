@@ -90,7 +90,7 @@ class SweepSimulatorFactory:
         target_key: str,
         base_config: dict[str, Any],
         *,
-        raster_plots: bool,
+        raster_mode: str = "none",
         save_dir: Path,
         output_keys: list[str] | None,
         compile_net: bool,
@@ -101,7 +101,7 @@ class SweepSimulatorFactory:
         self.build_perturbation = build_perturbation
         self.target_key = target_key
         self.base_config = base_config
-        self.raster_plots = raster_plots
+        self.raster_mode = raster_mode   # "none" | "single" | "all"
         self.save_dir = save_dir
         self.output_keys = output_keys
         self.compile_net = compile_net
@@ -130,7 +130,7 @@ class SweepSimulatorFactory:
             f"params={params} summary={summary}"
         )
         output_keys = self.output_keys
-        if self.raster_plots and output_keys is not None:
+        if self.raster_mode != "none" and output_keys is not None:
             output_keys = sorted(set(output_keys + ["spikes"]))
         stager_kwargs = {}
         if self.target_key == "rate":
@@ -145,7 +145,9 @@ class SweepSimulatorFactory:
             logger=logger,
             **stager_kwargs,
         )
-        if self.raster_plots:
+        if self.raster_mode == "all":
+            return _RasterPlotRunner(stager, seed, self.save_dir, sweep_label)
+        if self.raster_mode == "single":
             raster_dir = self.save_dir / "plots" / "rasters"
             already_rastered = raster_dir.exists() and any(
                 raster_dir.glob(f"spikes_{sweep_label}_*.png")
@@ -240,8 +242,14 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--raster-plots",
-        action="store_true",
-        help="Save per-run raster plots to save_dir/plots/rasters.",
+        choices=["none", "single", "all"],
+        default="none",
+        help=(
+            "Raster-plot mode: "
+            "'none' = no rasters (default); "
+            "'single' = one raster per sweep point (first repeat wins); "
+            "'all' = one raster per repeat."
+        ),
     )
     parser.add_argument(
         "--lite-output",
@@ -493,7 +501,7 @@ def create_sweep_simulator_factory(
     target_key: str,
     base_config: dict[str, Any],
     *,
-    raster_plots: bool,
+    raster_mode: str = "none",
     save_dir: Path,
     output_keys: list[str] | None,
     compile_net: bool,
@@ -504,7 +512,7 @@ def create_sweep_simulator_factory(
         build_perturbation,
         target_key,
         base_config,
-        raster_plots=raster_plots,
+        raster_mode=raster_mode,
         save_dir=save_dir,
         output_keys=output_keys,
         compile_net=compile_net,
@@ -659,7 +667,7 @@ def main() -> int:
         build_perturbation,
         target_key,
         sim_config,
-        raster_plots=args.raster_plots,
+        raster_mode=args.raster_plots,
         save_dir=save_root,
         output_keys=output_keys,
         compile_net=args.compile,

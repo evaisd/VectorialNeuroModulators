@@ -69,6 +69,7 @@ def _build_cmd(
     executor: str,
     log_level: str,
     style: str,
+    raster_plots: str,
 ) -> list[str]:
     return [
         PYTHON, str(SWEEP_SCRIPT),
@@ -81,7 +82,7 @@ def _build_cmd(
         "--max-workers", str(max_workers),
         "--lite-output",
         "--keep-raw",
-        "--raster-plots",
+        "--raster-plots", raster_plots,
         "--no-plots",
         "--no-compress",
         "--log-level", log_level,
@@ -142,6 +143,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--style",
         default="style/neuroips.mplstyle",
         help="Matplotlib style name or path.",
+    )
+    parser.add_argument(
+        "--raster-plots",
+        choices=["none", "single", "all"],
+        default="single",
+        help=(
+            "Raster-plot mode passed to sweep script: "
+            "'none' = no rasters; "
+            "'single' = one raster per sweep point (default); "
+            "'all' = one raster per repeat."
+        ),
     )
     parser.add_argument(
         "--skip-existing",
@@ -217,6 +229,7 @@ def main() -> int:
             executor=args.executor,
             log_level=args.log_level,
             style=args.style,
+            raster_plots=args.raster_plots,
         )
 
         if args.dry_run:
