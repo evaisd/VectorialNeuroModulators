@@ -207,6 +207,12 @@ def parse_args() -> argparse.Namespace:
         default=2,
         help="Number of consecutive identical rows (to 4 dp) required to declare convergence (default: 2).",
     )
+    parser.add_argument(
+        "--min-size",
+        type=int,
+        default=None,
+        help="Minimum vocabulary size that must be reached before --converge can trigger.",
+    )
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
         "--dense",
@@ -312,7 +318,7 @@ def main() -> None:
             rows.append(row)
             print(f"{size:<12}" + "".join(f"{g:>9.4f}" for g in gammas))
 
-            if args.converge and is_converged(rows, args.patience):
+            if args.converge and (args.min_size is None or size >= args.min_size) and is_converged(rows, args.patience):
                 print(f"\nConverged after vocab={size} ({args.patience} identical rows). Stopping.")
                 break
 
