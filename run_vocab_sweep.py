@@ -7,14 +7,18 @@ for C=18, k=3), solve the SDP and print a table of γ vs vocab_size per M.
 Usage:
     python run_vocab_sweep.py
     python run_vocab_sweep.py --M-min 1 --M-max 18
-    python run_vocab_sweep.py --out results/vocab_sweep.csv
+    python run_vocab_sweep.py --dense --out results/sweep_dense.csv
+    python run_vocab_sweep.py --sparse --out results/sweep_sparse.csv
+    python run_vocab_sweep.py --jobs 8 --out results/vocab_sweep.csv
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import combinations
 from pathlib import Path
 
@@ -24,8 +28,16 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
 from run_capacity_experiment import build_saturating_vocabulary
-from neuro_mod.analysis.capacity.sdp import capacity_curve
+from neuro_mod.analysis.capacity.sdp import (
+    build_attractor_vectors,
+    build_difference_vectors,
+    solve_subspace_sdp,
+)
 
+
+# ---------------------------------------------------------------------------
+# Vocabulary construction helpers
+# ---------------------------------------------------------------------------
 
 def all_attractors(C: int = 18, k: int = 3) -> list[tuple[int, ...]]:
     return list(combinations(range(C), k))
@@ -60,14 +72,8 @@ def build_dense_vocabulary(
     C: int,
     k: int,
 ) -> list[tuple[int, ...]]:
-    """Build a vocabulary of size n that greedily maximises intra-T single-swap pairs.
-
-    At each step the attractor with the most swap-neighbours already in T is added.
-    Ties are broken by total degree in the swap graph (most potential future edges).
-    The first seed is the highest-degree node in the swap graph.
-    """
+    """Greedily maximise intra-T single-swap pairs (hardest vocab)."""
     pool_set = set(pool)
-    # Precompute swap neighbours within pool
     neighbors: dict[tuple, list[tuple]] = {
         s: [nb for nb in single_swap_neighbors(s, C) if nb in pool_set]
         for s in pool
@@ -76,10 +82,8 @@ def build_dense_vocabulary(
 
     T: set[tuple] = set()
     remaining: set[tuple] = set(pool)
-    # count of neighbours each candidate has inside T
     nb_in_T: dict[tuple, int] = {s: 0 for s in pool}
 
-    # Seed: highest-degree node
     seed = max(pool, key=lambda s: degree[s])
     T.add(seed)
     remaining.remove(seed)
@@ -97,9 +101,54 @@ def build_dense_vocabulary(
     return sorted(T)
 
 
+def build_sparse_vocabulary(
+    n: int,
+    pool: list[tuple[int, ...]],
+    C: int,
+    k: int,
+) -> list[tuple[int, ...]]:
+    """Greedily minimise intra-T single-swap pairs (easiest vocab)."""
+    pool_set = set(pool)
+    neighbors: dict[tuple, list[tuple]] = {
+        s: [nb for nb in single_swap_neighbors(s, C) if nb in pool_set]
+        for s in pool
+    }
+    degree = {s: len(nb) for s, nb in neighbors.items()}
+
+    T: set[tuple] = set()
+    remaining: set[tuple] = set(pool)
+    nb_in_T: dict[tuple, int] = {s: 0 for s in pool}
+
+    seed = min(pool, key=lambda s: (degree[s], s))
+    T.add(seed)
+    remaining.remove(seed)
+    for nb in neighbors[seed]:
+        nb_in_T[nb] += 1
+
+    while len(T) < n and remaining:
+        best = min(remaining, key=lambda s: (nb_in_T[s], degree[s], s))
+        T.add(best)
+        remaining.remove(best)
+        for nb in neighbors[best]:
+            if nb in remaining:
+                nb_in_T[nb] += 1
+
+    return sorted(T)
+
+
+def build_random_vocabulary(
+    n: int,
+    pool: list[tuple[int, ...]],
+    seed: int | None = None,
+) -> list[tuple[int, ...]]:
+    """Return n attractors chosen uniformly at random from pool."""
+    rng = np.random.default_rng(seed)
+    indices = rng.choice(len(pool), size=n, replace=False)
+    return sorted(pool[i] for i in indices)
+
+
 def geometric_sizes(lo: int, hi: int, n_points: int = 20) -> list[int]:
     """Return ~n_points integers spaced geometrically between lo and hi (inclusive)."""
-    import math
     sizes = set()
     sizes.add(lo)
     sizes.add(hi)
@@ -108,6 +157,28 @@ def geometric_sizes(lo: int, hi: int, n_points: int = 20) -> list[int]:
         sizes.add(max(lo, min(hi, v)))
     return sorted(sizes)
 
+
+# ---------------------------------------------------------------------------
+# Parallelisable worker — one SDP solve per (vocab, M)
+# ---------------------------------------------------------------------------
+
+def _solve_one(args: tuple) -> tuple[int, int, float]:
+    """Worker: solve SDP for one (vocab_size, M) pair.
+
+    Returns (vocab_size, M, gamma).
+    """
+    vocab, M, C, k = args
+    X = build_attractor_vectors(vocab, C=C)
+    diff_vecs = build_difference_vectors(X, list(range(len(vocab))), k=k, bottleneck_only=True)
+    if not diff_vecs:
+        return (len(vocab), M, float("nan"))
+    result = solve_subspace_sdp(diff_vecs, M=M, C=C)
+    return (len(vocab), M, result["gamma"])
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Vocab-size sweep of SDP capacity curve.")
@@ -123,13 +194,53 @@ def parse_args() -> argparse.Namespace:
         help="Number of vocabulary sizes to sample (geometric grid).",
     )
     parser.add_argument(
+        "--step",
+        type=int,
+        default=None,
+        help="Fixed arithmetic step between vocabulary sizes (overrides --n-sizes).",
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=os.cpu_count(),
+        help="Number of parallel workers (default: all CPUs).",
+    )
+    parser.add_argument(
+        "--converge",
+        action="store_true",
+        default=False,
+        help="Stop early when γ values stabilise.",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=2,
+        help="Number of consecutive identical rows (to 4 dp) required to declare convergence (default: 2).",
+    )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--dense",
         action="store_true",
         default=False,
-        help=(
-            "Build vocabularies greedily to maximise intra-T single-swap pairs "
-            "(swap-dense construction) instead of the saturating-seeded lex pool."
-        ),
+        help="Greedily maximise intra-T single-swap pairs (hardest vocab).",
+    )
+    mode_group.add_argument(
+        "--sparse",
+        action="store_true",
+        default=False,
+        help="Greedily minimise intra-T single-swap pairs (easiest vocab).",
+    )
+    mode_group.add_argument(
+        "--random",
+        action="store_true",
+        default=False,
+        help="Sample vocabulary uniformly at random from the pool.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for --random mode.",
     )
     parser.add_argument(
         "--out",
@@ -142,42 +253,69 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     C, k = args.C, args.k
-    M_range = range(args.M_min, args.M_max + 1)
+    M_list = list(range(args.M_min, args.M_max + 1))
 
     saturating = build_saturating_vocabulary(C=C, k=k)
-    pool = all_attractors(C=C, k=k)  # 816 attractors for C=18, k=3
+    pool = all_attractors(C=C, k=k)
     min_size = len(saturating)
-    if args.pool_size == -1:
-        max_size = len(pool)
-    else:
-        max_size = min(args.pool_size, len(pool))
+    max_size = len(pool) if args.pool_size == -1 else min(args.pool_size, len(pool))
 
-    sizes = geometric_sizes(min_size, max_size, n_points=args.n_sizes)
-    mode = "dense" if args.dense else "saturating-seeded"
+    if args.step is not None:
+        sizes = list(range(min_size, max_size + 1, args.step))
+        if sizes[-1] != max_size:
+            sizes.append(max_size)
+    else:
+        sizes = geometric_sizes(min_size, max_size, n_points=args.n_sizes)
+    mode = "dense" if args.dense else "sparse" if args.sparse else "random" if args.random else "saturating-seeded"
     print(f"C={C}, k={k}, |H_k|={max_size}, saturating={min_size}, mode={mode}")
     print(f"Vocabulary sizes: {sizes}")
-    print(f"M range: {list(M_range)}\n")
+    print(f"M range: {M_list}  |  workers: {args.jobs}\n")
 
-    # Header
-    M_list = list(M_range)
+    def build_vocab(size: int) -> list[tuple]:
+        if args.dense:
+            return build_dense_vocabulary(size, pool, C=C, k=k)
+        elif args.sparse:
+            return build_sparse_vocabulary(size, pool, C=C, k=k)
+        elif args.random:
+            return build_random_vocabulary(size, pool, seed=args.seed)
+        else:
+            return build_vocabulary_from_pool(size, pool, saturating)
+
+    def is_converged(rows: list[list], patience: int) -> bool:
+        """True if the last `patience` rows have identical γ strings."""
+        if len(rows) < patience:
+            return False
+        tail = [r[1:] for r in rows[-patience:]]  # strip vocab_size column
+        return all(r == tail[0] for r in tail[1:])
+
     header = ["vocab_size"] + [f"M={m}" for m in M_list]
     rows: list[list] = []
 
-    for size in sizes:
-        if args.dense:
-            vocab = build_dense_vocabulary(size, pool, C=C, k=k)
-        else:
-            vocab = build_vocabulary_from_pool(size, pool, saturating)
-        assert len(vocab) == size, f"Expected {size} attractors, got {len(vocab)}"
+    print(f"{'vocab_size':<12}" + "".join(f"{'M='+str(m):>9}" for m in M_list))
 
-        results = capacity_curve(vocab, M_range=M_range, C=C, k=k)
-        gammas = results["gamma_opt"]
+    with ProcessPoolExecutor(max_workers=args.jobs) as executor:
+        for size in sizes:
+            vocab = build_vocab(size)
+            assert len(vocab) == size
 
-        row = [size] + [f"{g:.4f}" for g in gammas]
-        rows.append(row)
+            # Dispatch all M values for this size in parallel
+            futures = {
+                executor.submit(_solve_one, (vocab, M, C, k)): M
+                for M in M_list
+            }
+            size_results: dict[int, float] = {}
+            for future in as_completed(futures):
+                _, M, gamma = future.result()
+                size_results[M] = gamma
 
-        gamma_str = "  ".join(f"M={m}: {g:.4f}" for m, g in zip(M_list, gammas))
-        print(f"vocab={size:4d}  {gamma_str}")
+            gammas = [size_results[M] for M in M_list]
+            row = [size] + [f"{g:.4f}" for g in gammas]
+            rows.append(row)
+            print(f"{size:<12}" + "".join(f"{g:>9.4f}" for g in gammas))
+
+            if args.converge and is_converged(rows, args.patience):
+                print(f"\nConverged after vocab={size} ({args.patience} identical rows). Stopping.")
+                break
 
     if args.out:
         out_path = Path(args.out)
