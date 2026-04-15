@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import re
 import subprocess
 import sys
@@ -161,6 +162,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip configs whose output already contains sweep_summary.parquet.",
     )
     parser.add_argument(
+        "--config-workers",
+        type=int,
+        default=1,
+        help="How many configs to run in parallel (default: 1, sequential).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print commands without executing them.",
@@ -204,19 +211,18 @@ def main() -> int:
     total = len(all_configs)
     n_skipped = n_done = n_failed = 0
 
-    for i, config_path in enumerate(all_configs, start=1):
+    def _run_one(i: int, config_path: Path) -> str:
+        """Run a single config. Returns 'skipped' | 'done' | 'failed'."""
         parts = _parse_config_name(config_path)
         if parts is None:
-            continue
+            return "skipped"
         M_label, attractor_label = parts
         save_dir = save_root / M_label / attractor_label
-
         prefix = f"[{i}/{total}] {M_label}/{attractor_label}"
 
         if args.skip_existing and _is_done(save_dir):
-            print(f"[skip] {prefix}")
-            n_skipped += 1
-            continue
+            print(f"[skip] {prefix}", flush=True)
+            return "skipped"
 
         cmd = _build_cmd(
             config_path,
@@ -233,16 +239,36 @@ def main() -> int:
         )
 
         if args.dry_run:
-            print(f"{prefix}  →  {' '.join(str(c) for c in cmd)}")
-            continue
+            print(f"{prefix}  →  {' '.join(str(c) for c in cmd)}", flush=True)
+            return "done"
 
-        print(f"{prefix}")
+        print(f"{prefix}", flush=True)
         result = subprocess.run(cmd, cwd=ROOT)
         if result.returncode != 0:
-            print(f"  WARNING: sweep failed (exit {result.returncode})")
+            print(f"  WARNING: sweep failed (exit {result.returncode})", flush=True)
+            return "failed"
+        return "done"
+
+    def _tally(outcome: str) -> None:
+        nonlocal n_skipped, n_done, n_failed
+        if outcome == "skipped":
+            n_skipped += 1
+        elif outcome == "failed":
             n_failed += 1
         else:
             n_done += 1
+
+    if args.config_workers == 1:
+        for i, config_path in enumerate(all_configs, start=1):
+            _tally(_run_one(i, config_path))
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.config_workers) as pool:
+            futs = {
+                pool.submit(_run_one, i, cfg): cfg
+                for i, cfg in enumerate(all_configs, start=1)
+            }
+            for fut in concurrent.futures.as_completed(futs):
+                _tally(fut.result())
 
     if not args.dry_run:
         print(

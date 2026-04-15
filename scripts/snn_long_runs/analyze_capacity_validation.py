@@ -3,9 +3,10 @@
 
 Walks simulations/capacity_validation/M{M}/{target_label}/ and runs:
 
-  1. Landscape analysis (pooled across all experiments for a given M):
-       - vocabulary selection, saturation coverage, SDP capacity curve
-       - saves capacity_curve_M{M}.png, vocabulary_M{M}.json, coverage_M{M}.json
+  1. Landscape analysis (per M group):
+       - loads canonical vocabulary and SDP curve from outputs/capacity_setup/
+       - checks saturation coverage
+       - saves coverage_M{M}.json
 
   2. Targeting analysis (per experiment):
        - attractor role classification relative to the target and δ*
@@ -17,7 +18,8 @@ Usage::
     python scripts/snn_long_runs/analyze_capacity_validation.py \\
         --validation-dir simulations/capacity_validation \\
         --output-dir simulations/capacity_validation/analysis \\
-        --M 1
+        --sdp-dir outputs/capacity_setup \\
+        --M 4
 """
 
 from __future__ import annotations
@@ -38,16 +40,50 @@ if str(_ROOT) not in sys.path:
 
 from neuro_mod.analysis.capacity import (
     build_attractor_vectors,
-    capacity_curve,
     check_saturation_coverage,
     classify_attractor_role,
     load_attractors_from_npy,
-    select_vocabulary_from_empirical,
 )
 import matplotlib.pyplot as plt
 from scipy import stats
 
-from neuro_mod.analysis.capacity.plotting import plot_capacity_curve
+
+# ---------------------------------------------------------------------------
+# SDP outputs loader
+# ---------------------------------------------------------------------------
+
+def load_sdp_outputs(sdp_dir: Path) -> dict:
+    """Load the canonical vocabulary and pre-computed SDP curve from run_capacity_experiment.py.
+
+    Reads:
+        vocabulary.json   — list of attractor tuples
+        sdp_outputs.npz   — M_values, gamma_opt, Pi_matrices, is_isotropic
+
+    Returns dict with keys:
+        vocabulary  (list[tuple[int, ...]])
+        curve       (dict with keys M_values, gamma_opt, is_isotropic, Pi_matrices)
+    """
+    vocab_path = sdp_dir / "vocabulary.json"
+    npz_path = sdp_dir / "sdp_outputs.npz"
+
+    if not vocab_path.exists() or not npz_path.exists():
+        raise FileNotFoundError(
+            f"SDP outputs not found in {sdp_dir}. "
+            "Run run_capacity_experiment.py first."
+        )
+
+    with open(vocab_path) as f:
+        vocabulary = [tuple(t) for t in json.load(f)]
+
+    npz = np.load(npz_path)
+    curve = {
+        "M_values": npz["M_values"].tolist(),
+        "gamma_opt": npz["gamma_opt"].tolist(),
+        "is_isotropic": npz["is_isotropic"].tolist(),
+        "Pi_matrices": npz["Pi_matrices"],
+    }
+
+    return {"vocabulary": vocabulary, "curve": curve}
 
 
 # ---------------------------------------------------------------------------
@@ -183,39 +219,19 @@ def pool_landscape(
 # ---------------------------------------------------------------------------
 
 def run_landscape_analysis(
-    pooled_tuples: list[tuple[int, ...]],
-    pooled_probs: np.ndarray,
+    vocab: list[tuple[int, ...]],
+    curve: dict,
+    coverage: dict,
     M_val: int,
     output_dir: Path,
-    C: int = 18,
-    k: int = 3,
 ) -> dict:
-    """Select vocabulary, check coverage, compute SDP capacity curve, save outputs."""
+    """Check saturation coverage of the canonical vocabulary and save outputs."""
     print(f"\n=== Landscape analysis (M={M_val}) ===")
-    print(f"  Pooled attractor universe: {len(pooled_tuples)} attractors")
-
-    vocab = select_vocabulary_from_empirical(
-        pooled_tuples, pooled_probs, C=C, k=k, n_targets=12,
-        strategy="greedy_saturating",
-    )
-    print(f"  Selected vocabulary: {len(vocab)} attractors")
-
-    coverage = check_saturation_coverage(vocab, C=C)
+    print(f"  Canonical vocabulary: {len(vocab)} attractors")
     print(f"  Coverage: {coverage['n_covered']}/{coverage['n_total']} pairs "
           f"({'saturating' if coverage['is_saturating'] else 'NOT saturating'})")
 
-    print(f"  Running SDP capacity curve for M=1..{C} ...")
-    curve = capacity_curve(vocab, M_range=range(1, C + 1), C=C, k=k)
-
-    # Save outputs
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    plt.close("all")  # capacity curve figure saved later in unified plot
-
-    vocab_path = output_dir / f"vocabulary_M{M_val}.json"
-    with open(vocab_path, "w") as f:
-        json.dump([list(t) for t in vocab], f, indent=2)
-    print(f"  Saved: {vocab_path}")
 
     cov_path = output_dir / f"coverage_M{M_val}.json"
     cov_out = {k2: (v if not isinstance(v, list) else [list(x) for x in v])
@@ -225,6 +241,28 @@ def run_landscape_analysis(
     print(f"  Saved: {cov_path}")
 
     return {"vocab": vocab, "curve": curve, "coverage": coverage}
+
+
+# ---------------------------------------------------------------------------
+# Within-size-class helpers
+# ---------------------------------------------------------------------------
+
+def _within_class_probs(
+    pooled_tuples: list[tuple[int, ...]],
+    pooled_probs: np.ndarray,
+) -> np.ndarray:
+    """Return within-size-class normalised probabilities.
+
+    π_class(s) = π(s) / Σ_{s': |s'|=|s|} π(s')
+    """
+    sizes = np.array([len(t) for t in pooled_tuples], dtype=np.int64)
+    probs_wc = np.zeros_like(pooled_probs)
+    for k_val in np.unique(sizes):
+        mask = sizes == k_val
+        total = pooled_probs[mask].sum()
+        if total > 0:
+            probs_wc[mask] = pooled_probs[mask] / total
+    return probs_wc
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +278,8 @@ def run_targeting_analysis(
     """Classify every pooled attractor's role relative to this experiment's target.
 
     Returns DataFrame with columns:
-        attractor, prob, role, linear_score, score_contrast, direction, overlap, symmetric_diff
+        attractor, prob, prob_within_class, attractor_size, role, linear_score,
+        score_contrast, direction, overlap, symmetric_diff
     sorted by prob descending.
     """
     target = exp["target"]
@@ -249,12 +288,17 @@ def run_targeting_analysis(
     target_x = build_attractor_vectors([target], C=C)[0]
     prob_map = dict(zip(pooled_tuples, pooled_probs))
 
+    wc_probs = _within_class_probs(pooled_tuples, pooled_probs)
+    wc_map = dict(zip(pooled_tuples, wc_probs))
+
     rows = []
     for tup in pooled_tuples:
         role_info = classify_attractor_role(tup, target, delta_star, target_x)
         rows.append({
             "attractor": str(tup),
             "prob": prob_map.get(tup, 0.0),
+            "prob_within_class": wc_map.get(tup, 0.0),
+            "attractor_size": len(tup),
             "role": role_info["role"],
             "linear_score": role_info["linear_score"],
             "score_contrast": role_info["score_contrast"],
@@ -280,6 +324,25 @@ def _target_rank(df: pd.DataFrame, target: tuple) -> int:
     return int(matches.index[0]) + 1
 
 
+def _target_rank_within_class(df: pd.DataFrame, target: tuple) -> int:
+    """Return 1-based rank of target by prob_within_class within its size class."""
+    if "prob_within_class" not in df.columns or "attractor_size" not in df.columns:
+        return -1
+    target_str = str(target)
+    target_size = len(target)
+    same_class = (
+        df[df["attractor_size"] == target_size]
+        .sort_values("prob_within_class", ascending=False)
+        .reset_index(drop=True)
+    )
+    if same_class.empty:
+        return -1
+    matches = same_class[same_class["attractor"] == target_str]
+    if matches.empty:
+        return -1
+    return int(matches.index[0]) + 1
+
+
 def print_report(
     experiments: list[dict],
     landscape_results: dict[int, dict],
@@ -291,11 +354,16 @@ def print_report(
 
     for M_val, lr in sorted(landscape_results.items()):
         curve = lr["curve"]
-        gamma_m1 = curve["gamma_opt"][0] if curve["gamma_opt"] else float("nan")
         gamma_full = (2 / 3) ** 0.5
-        iso_m1 = gamma_full * (1 / 18) ** 0.5
-        print(f"\nM={M_val}  |  Γ(M=1)={gamma_m1:.4f}  "
-              f"(isotropic prediction: {iso_m1:.4f},  full: {gamma_full:.4f})")
+        if curve["gamma_opt"]:
+            m_first = curve["M_values"][0]
+            gamma_first = curve["gamma_opt"][0]
+            iso_first = gamma_full * (m_first / 18) ** 0.5
+            gamma_str = (f"Γ(M={m_first})={gamma_first:.4f}  "
+                         f"(isotropic prediction: {iso_first:.4f},  full: {gamma_full:.4f})")
+        else:
+            gamma_str = "no curve data"
+        print(f"\nM={M_val}  |  {gamma_str}")
         cov = lr["coverage"]
         print(f"  Vocabulary: {len(lr['vocab'])} attractors  |  "
               f"Coverage: {cov['n_covered']}/{cov['n_total']} "
@@ -305,12 +373,18 @@ def print_report(
     for exp, df in targeting_results:
         target = exp["target"]
         rank = _target_rank(df, target)
+        rank_wc = _target_rank_within_class(df, target)
         n_bottleneck = (df["role"] == "bottleneck").sum()
         target_prob = df[df["attractor"] == str(target)]["prob"].values
         tp_str = f"{target_prob[0]:.5f}" if len(target_prob) else "n/a"
+        target_prob_wc = df[df["attractor"] == str(target)]["prob_within_class"].values
+        tpwc_str = (f"{target_prob_wc[0]:.5f}"
+                    if len(target_prob_wc) and "prob_within_class" in df.columns
+                    else "n/a")
         top_bn = df[df["role"] == "bottleneck"].head(3)["attractor"].tolist()
         print(f"  M={exp['M']}  target={target}  "
               f"rank={rank}  p(target)={tp_str}  "
+              f"rank_within_class={rank_wc}  p_class(target)={tpwc_str}  "
               f"bottlenecks={n_bottleneck}  top3={top_bn}")
 
     print()
@@ -326,9 +400,11 @@ def plot_targeting_quality(
 ) -> None:
     """Unified targeting quality summary with M on the x-axis.
 
-    Two panels (stacked):
+    Three panels (stacked):
         Top:    target score percentile (%) — where the target sits in the
-                linear-score distribution across all attractors (100% = highest)
+                linear-score distribution across ALL attractors (100% = highest)
+        Middle: target prob_within_class percentile (%) — where the target sits
+                by prob_within_class among same-size-class attractors (100% = highest)
         Bottom: Spearman ρ between linear_score and log p(S)
 
     One point per experiment, jittered horizontally.  Mean ± std shown per M.
@@ -341,6 +417,7 @@ def plot_targeting_quality(
         df_plot = df[df["prob"] > 0].copy()
         df_plot["log_prob"] = np.log(df_plot["prob"])
         target_str = str(exp["target"])
+        target_size = len(exp["target"])
         is_target = df_plot["attractor"] == target_str
 
         rho, _ = stats.spearmanr(df_plot["linear_score"], df_plot["log_prob"])
@@ -349,18 +426,35 @@ def plot_targeting_quality(
         pct = ((df_plot["linear_score"] < target_score).mean() * 100
                if is_target.any() else np.nan)
 
-        records.append({"M": exp["M"], "label": exp["label"], "rho": rho, "pct": pct})
+        # Within-class probability percentile
+        pct_wc = np.nan
+        if (is_target.any()
+                and "prob_within_class" in df_plot.columns
+                and "attractor_size" in df_plot.columns):
+            same_class = df_plot[df_plot["attractor_size"] == target_size]
+            target_pwc = df_plot.loc[is_target, "prob_within_class"].values[0]
+            pct_wc = (same_class["prob_within_class"] < target_pwc).mean() * 100
+
+        records.append({
+            "M": exp["M"], "label": exp["label"],
+            "rho": rho, "pct": pct, "pct_wc": pct_wc,
+        })
 
     df_sum = pd.DataFrame(records)
     m_vals = sorted(df_sum["M"].unique())
     x_ticks = {mv: i for i, mv in enumerate(m_vals)}
 
-    fig, (ax_pct, ax_rho) = plt.subplots(2, 1, figsize=(max(5, 2 * len(m_vals) + 2), 7),
-                                          sharex=True)
+    fig, (ax_pct, ax_pct_wc, ax_rho) = plt.subplots(
+        3, 1, figsize=(max(5, 2 * len(m_vals) + 2), 10), sharex=True,
+    )
 
     for ax, col, ylabel, title, ref in [
-        (ax_pct, "pct",  "target score percentile (%)", "Target score percentile", 100),
-        (ax_rho, "rho",  r"Spearman $\rho$",             r"Spearman $\rho$  (linear score vs log $p$)", 0),
+        (ax_pct,    "pct",    "target score percentile (%)",
+                              "Target score percentile (all attractors)",               100),
+        (ax_pct_wc, "pct_wc", "within-class prob percentile (%)",
+                              r"Target $\pi_{class}$ percentile (same-size attractors)", 100),
+        (ax_rho,    "rho",    r"Spearman $\rho$",
+                              r"Spearman $\rho$  (linear score vs log $p$)",              0),
     ]:
         ax.axhline(ref, color="k", lw=0.8, ls="--", alpha=0.4)
 
@@ -384,7 +478,7 @@ def plot_targeting_quality(
     ax_rho.set_xticklabels([f"M={mv}" for mv in m_vals], fontsize=10)
     ax_rho.set_xlabel("M  (neuromodulatory rank)", fontsize=10)
 
-    fig.suptitle("Targeting quality vs. M  |  α=0.025\n"
+    fig.suptitle("Targeting quality vs. M  |  α=0.25\n"
                  "Points = individual experiments.  Black = mean ± std.",
                  fontsize=11)
     fig.tight_layout()
@@ -560,7 +654,7 @@ def plot_delta_pi(
                   title="group  /  bubble ∝ std", title_fontsize=8)
 
     fig.suptitle(
-        r"$\Delta\pi$ per attractor role  |  α=0.025 vs. baseline" "\n"
+        r"$\Delta\pi$ per attractor role  |  α=0.25 vs. baseline" "\n"
         "Bubble centre = group mean.  Bubble area ∝ std within group.",
         fontsize=10,
     )
@@ -573,25 +667,175 @@ def plot_delta_pi(
 
 
 # ---------------------------------------------------------------------------
+# Δπ(M) curve — empirical analog of the capacity curve
+# ---------------------------------------------------------------------------
+
+def plot_delta_pi_curve(
+    experiments: list[dict],
+    baseline_pi0: dict,
+    landscape_results: dict[int, dict],
+    output_dir: Path,
+    C: int = 18,
+) -> None:
+    """Line plot of mean Δπ and mean log(π/π₀) as a function of M.
+
+    Two panels (stacked):
+        Top:    mean Δπ  (absolute) ± std  per group, vs M
+        Bottom: mean log(π/π₀) (relative) ± std per group, vs M
+                with γ_opt(M) overlaid on a secondary y-axis
+
+    Groups: target (black), bottleneck/sym_diff=2 (crimson), other (steelblue).
+    Shaded bands = ±1 std across experiments at each M.
+    """
+    # ---- collect per-attractor records (same logic as plot_delta_pi) --------
+    group_data: dict[str, list[dict]] = {"target": [], "bottleneck": [], "other": []}
+
+    for exp in experiments:
+        target = exp["target"]
+        delta_star = exp["delta_star"]
+        target_x = build_attractor_vectors([target], C=C)[0]
+
+        npy_path = exp["path"] / "processed" / "sweep_0" / "attractors.npy"
+        att_dict = np.load(npy_path, allow_pickle=True).item()
+        total_dur = exp["meta"]["total_duration_ms"]
+        total_occ = exp["meta"]["total_occurrences"]
+        mean_ls = total_dur / total_occ if total_occ > 0 else 1.0
+        pi_perturbed = {tup: info["#"] * mean_ls / total_dur
+                        for tup, info in att_dict.items()}
+
+        all_atts = set(baseline_pi0.keys()) | set(pi_perturbed.keys())
+        for att in all_atts:
+            pi0_val = baseline_pi0.get(att, 0.0)
+            pi_val = pi_perturbed.get(att, 0.0)
+            delta_pi_val = pi_val - pi0_val
+            log_ratio = (np.log(pi_val / pi0_val)
+                         if pi0_val > 0 and pi_val > 0 else np.nan)
+            role_info = classify_attractor_role(att, target, delta_star, target_x)
+            if att == target:
+                group = "target"
+            elif role_info["symmetric_diff"] == 2:
+                group = "bottleneck"
+            else:
+                group = "other"
+            group_data[group].append({
+                "M": exp["M"], "delta_pi": delta_pi_val, "log_ratio": log_ratio,
+            })
+
+    # ---- summarise: mean ± std per (M, group) --------------------------------
+    group_keys = ["target", "bottleneck", "other"]
+    group_colors = {"target": "black", "bottleneck": "crimson", "other": "steelblue"}
+    group_labels = {"target": "Target", "bottleneck": "Bottleneck (sym_diff=2)",
+                    "other": "Other"}
+    m_vals = sorted({e["M"] for e in experiments})
+
+    summary: dict[str, dict] = {}
+    for gk in group_keys:
+        summary[gk] = {}
+        for mv in m_vals:
+            rows = [r for r in group_data[gk] if r["M"] == mv]
+            if not rows:
+                continue
+            abs_vals = np.array([r["delta_pi"] for r in rows])
+            rel_vals = np.array([r["log_ratio"] for r in rows], dtype=float)
+            rel_vals_finite = rel_vals[np.isfinite(rel_vals)]
+            summary[gk][mv] = {
+                "mean_abs": float(np.mean(abs_vals)),
+                "std_abs": float(np.std(abs_vals)),
+                "mean_rel": float(np.mean(rel_vals_finite)) if len(rel_vals_finite) else np.nan,
+                "std_rel": float(np.std(rel_vals_finite)) if len(rel_vals_finite) else np.nan,
+            }
+
+    # ---- capacity curve (secondary axis) ------------------------------------
+    curve = next(iter(landscape_results.values()))["curve"]
+    curve_M = np.array(curve["M_values"])
+    curve_gamma = np.array(curve["gamma_opt"])
+
+    # ---- plot ----------------------------------------------------------------
+    fig, (ax_abs, ax_rel) = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
+
+    for ax in (ax_abs, ax_rel):
+        ax.axhline(0, color="k", lw=0.8, ls="--", alpha=0.3, zorder=1)
+
+    legend_handles = []
+    for gk in group_keys:
+        color = group_colors[gk]
+        mv_arr = np.array([mv for mv in m_vals if mv in summary[gk]])
+        if not len(mv_arr):
+            continue
+
+        mean_abs = np.array([summary[gk][mv]["mean_abs"] for mv in mv_arr])
+        std_abs  = np.array([summary[gk][mv]["std_abs"]  for mv in mv_arr])
+        mean_rel = np.array([summary[gk][mv]["mean_rel"] for mv in mv_arr])
+        std_rel  = np.array([summary[gk][mv]["std_rel"]  for mv in mv_arr])
+
+        for ax, mean, std in [(ax_abs, mean_abs, std_abs),
+                               (ax_rel, mean_rel, std_rel)]:
+            finite = np.isfinite(mean)
+            if not finite.any():
+                continue
+            ax.plot(mv_arr[finite], mean[finite],
+                    "o-", color=color, lw=2, ms=5, zorder=3)
+            ax.fill_between(mv_arr[finite],
+                            mean[finite] - std[finite],
+                            mean[finite] + std[finite],
+                            color=color, alpha=0.15, zorder=2)
+
+        legend_handles.append(
+            plt.Line2D([0], [0], color=color, lw=2, marker="o", ms=5,
+                       label=group_labels[gk])
+        )
+
+    # secondary axis: γ_opt(M)
+    ax2 = ax_rel.twinx()
+    ax2.plot(curve_M, curve_gamma, "s--", color="tab:orange",
+             lw=1.5, ms=4, alpha=0.8, label=r"$\Gamma_\mathrm{opt}(M)$ (SDP)")
+    ax2.set_ylabel(r"$\Gamma_\mathrm{opt}(M)$", fontsize=10, color="tab:orange")
+    ax2.tick_params(axis="y", labelcolor="tab:orange")
+    ax2.set_ylim(bottom=0)
+    legend_handles.append(
+        plt.Line2D([0], [0], color="tab:orange", lw=1.5, ls="--", marker="s",
+                   ms=4, label=r"$\Gamma_\mathrm{opt}$ (SDP, right axis)")
+    )
+
+    ax_abs.set_ylabel(r"mean $\Delta\pi$  (absolute)", fontsize=10)
+    ax_rel.set_ylabel(r"mean $\log(\pi / \pi_0)$  (relative)", fontsize=10)
+    ax_abs.set_title(r"$\Delta\pi(M)$ — absolute occupancy change vs. M", fontsize=11)
+    ax_rel.set_title(r"$\Delta\pi(M)$ — relative occupancy change vs. M", fontsize=11)
+
+    ax_rel.set_xlabel("M  (neuromodulatory rank)", fontsize=10)
+    ax_rel.set_xticks(m_vals)
+
+    ax_abs.legend(handles=legend_handles, fontsize=8, loc="upper left")
+
+    fig.suptitle(
+        r"Empirical $\Delta\pi(M)$  |  α=0.25 vs. baseline" "\n"
+        r"Lines = group mean.  Bands = ±1 std across experiments.",
+        fontsize=10,
+    )
+    fig.tight_layout()
+
+    out_path = output_dir / "delta_pi_curve.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+
+
+# ---------------------------------------------------------------------------
 # Unified capacity curve
 # ---------------------------------------------------------------------------
 
 def plot_capacity_curve_unified(
-    experiments: list[dict],
     landscape_results: dict[int, dict],
     output_dir: Path,
     C: int = 18,
     k: int = 3,
 ) -> None:
-    """Single capacity curve figure, one line per M group (from its vocabulary).
+    """Capacity curve from the canonical SDP vocabulary (shared across all M groups)."""
+    # All M groups share the same canonical vocabulary and curve — just plot once.
+    curve = next(iter(landscape_results.values()))["curve"]
 
-    If all M groups produce the same curve (same landscape), lines will overlap —
-    that itself is informative.  Each curve is labelled by which M group's vocabulary
-    was used to compute it.
-    """
     fig, ax = plt.subplots(figsize=(7, 5))
 
-    # Reference lines (same for all)
     gamma_full = (2 / 3) ** 0.5
     m_range = list(range(1, C + 1))
     iso = [gamma_full * (m / C) ** 0.5 for m in m_range]
@@ -600,12 +844,9 @@ def plot_capacity_curve_unified(
     ax.axhline(gamma_full, color="b", lw=0.8, ls=":", alpha=0.4,
                label=f"full control = {gamma_full:.3f}")
 
-    colors = plt.cm.tab10.colors
-    for i, (M_val, lr) in enumerate(sorted(landscape_results.items())):
-        curve = lr["curve"]
-        ax.plot(curve["M_values"], curve["gamma_opt"],
-                "o-", color=colors[i % len(colors)], lw=1.8, ms=5,
-                label=f"SDP optimal (vocab from M={M_val} exps)")
+    ax.plot(curve["M_values"], curve["gamma_opt"],
+            "o-", color="tab:orange", lw=1.8, ms=5,
+            label="SDP optimal (canonical vocabulary)")
 
     ax.set_xlabel("M  (number of neuromodulatory modes)", fontsize=11)
     ax.set_ylabel(r"$\Gamma_\mathrm{opt}(M)$  (minimax targeting margin)", fontsize=11)
@@ -663,16 +904,34 @@ def main() -> None:
         default=_ROOT / "simulations" / "baseline_run",
         help="Directory of the unperturbed baseline run (default: simulations/baseline_run).",
     )
+    parser.add_argument(
+        "--sdp-dir",
+        type=Path,
+        default=_ROOT / "outputs" / "capacity_setup",
+        help="Directory containing vocabulary.json and sdp_outputs.npz from "
+             "run_capacity_experiment.py (default: outputs/capacity_setup).",
+    )
     args = parser.parse_args()
 
     validation_dir = args.validation_dir.resolve()
     output_dir = (args.output_dir or validation_dir / "analysis").resolve()
-
     baseline_dir = args.baseline_dir.resolve()
+    sdp_dir = args.sdp_dir.resolve()
 
     print(f"Validation dir : {validation_dir}")
     print(f"Output dir     : {output_dir}")
     print(f"Baseline dir   : {baseline_dir}")
+    print(f"SDP dir        : {sdp_dir}")
+
+    # Load canonical vocabulary and pre-computed SDP curve once.
+    sdp_data = load_sdp_outputs(sdp_dir)
+    vocab = sdp_data["vocabulary"]
+    curve = sdp_data["curve"]
+    coverage = check_saturation_coverage(vocab, C=args.C)
+    print(f"Vocabulary     : {len(vocab)} attractors  "
+          f"({'saturating' if coverage['is_saturating'] else 'NOT saturating'}, "
+          f"{coverage['n_covered']}/{coverage['n_total']} pairs covered)")
+    print(f"SDP M range    : M={curve['M_values'][0]}..{curve['M_values'][-1]}")
 
     # Load baseline π₀ once.
     # The baseline run may have a flat processed/ layout (no sweep_0/ subdir).
@@ -722,12 +981,10 @@ def main() -> None:
     for M_val in m_values:
         exps_m = [e for e in experiments if e["M"] == M_val]
 
-        # Landscape (pooled)
+        # Landscape: canonical vocab/curve shared across all M groups;
+        # pool empirical landscape for per-attractor probabilities used in targeting.
         pooled_tuples, pooled_probs = pool_landscape(exps_m)
-        lr = run_landscape_analysis(
-            pooled_tuples, pooled_probs, M_val, output_dir,
-            C=args.C, k=args.k,
-        )
+        lr = run_landscape_analysis(vocab, curve, coverage, M_val, output_dir)
         landscape_results[M_val] = lr
 
         # Targeting (per experiment)
@@ -741,10 +998,11 @@ def main() -> None:
 
     # Unified plots (all M values on one figure each)
     print("\n--- Generating unified plots ---")
-    plot_capacity_curve_unified(experiments, landscape_results, output_dir,
-                                C=args.C, k=args.k)
+    plot_capacity_curve_unified(landscape_results, output_dir, C=args.C, k=args.k)
     plot_targeting_quality(targeting_results, output_dir)
     plot_delta_pi(experiments, baseline_pi0, output_dir, C=args.C)
+    plot_delta_pi_curve(experiments, baseline_pi0, landscape_results, output_dir,
+                        C=args.C)
 
     print_report(experiments, landscape_results, targeting_results)
 
