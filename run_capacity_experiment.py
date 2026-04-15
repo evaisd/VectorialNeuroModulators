@@ -258,8 +258,17 @@ def parse_args() -> argparse.Namespace:
         "--n-vocab",
         type=int,
         default=None,
-        help="Vocabulary size for extended construction. "
-             "Omit to use the minimal saturating set (2*(C//k) attractors).",
+        help="Target vocabulary size.  Behaviour depends on --saturate (see below).",
+    )
+    parser.add_argument(
+        "--no-saturate",
+        dest="saturate",
+        action="store_false",
+        default=True,
+        help=(
+            "Disable the saturating construction.  When set, build_vocabulary is "
+            "used without a saturating seed (--n-vocab is required)."
+        ),
     )
     parser.add_argument("--C", type=int, default=18, help="Number of clusters.")
     parser.add_argument("--k", type=int, default=3, help="Active clusters per attractor.")
@@ -276,11 +285,25 @@ def main() -> None:
     config_dir = ROOT / args.config_dir
     out_dir = ROOT / args.out_dir
 
-    saturating = build_saturating_vocabulary(C=args.C, k=args.k)
-    if args.n_vocab is None:
-        vocabulary = saturating
+    if args.saturate:
+        saturating = build_saturating_vocabulary(C=args.C, k=args.k)
+        if args.n_vocab is None:
+            vocabulary = saturating
+        elif args.n_vocab <= len(saturating):
+            vocabulary = saturating[: args.n_vocab]
+        else:
+            # Build a large pool, keep saturating set whole, fill remaining slots
+            n_extra = args.n_vocab - len(saturating)
+            pool = build_vocabulary(
+                n=args.n_vocab + len(saturating), C=args.C, k=args.k
+            )
+            sat_set = set(saturating)
+            extras = [v for v in pool if v not in sat_set][:n_extra]
+            vocabulary = sorted(saturating + extras)
     else:
-        vocabulary = build_vocabulary(n=args.n_vocab, C=args.C, k=args.k, seed=set(saturating))
+        if args.n_vocab is None:
+            raise ValueError("--n-vocab is required when --no-saturate is set.")
+        vocabulary = build_vocabulary(n=args.n_vocab, C=args.C, k=args.k)
     print(f"Vocabulary: {len(vocabulary)} attractors")
 
     sdp_results = run_sdp(vocabulary, M_range=M_range, C=args.C, k=args.k)
