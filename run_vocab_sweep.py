@@ -136,16 +136,6 @@ def build_sparse_vocabulary(
     return sorted(T)
 
 
-def build_random_vocabulary(
-    n: int,
-    pool: list[tuple[int, ...]],
-    seed: int | None = None,
-) -> list[tuple[int, ...]]:
-    """Return n attractors chosen uniformly at random from pool."""
-    rng = np.random.default_rng(seed)
-    indices = rng.choice(len(pool), size=n, replace=False)
-    return sorted(pool[i] for i in indices)
-
 
 def geometric_sizes(lo: int, hi: int, n_points: int = 20) -> list[int]:
     """Return ~n_points integers spaced geometrically between lo and hi (inclusive)."""
@@ -171,7 +161,7 @@ def _solve_one(args: tuple) -> tuple[int, int, float]:
     X = build_attractor_vectors(vocab, C=C)
     diff_vecs = build_difference_vectors(X, list(range(len(vocab))), k=k, bottleneck_only=True)
     if not diff_vecs:
-        return (len(vocab), M, float("nan"))
+        return (len(vocab), M, float("inf"))
     result = solve_subspace_sdp(diff_vecs, M=M, C=C)
     return (len(vocab), M, result["gamma"])
 
@@ -271,21 +261,30 @@ def main() -> None:
     print(f"Vocabulary sizes: {sizes}")
     print(f"M range: {M_list}  |  workers: {args.jobs}\n")
 
+    # For random mode, shuffle the pool once and slice — guarantees monotonicity.
+    if args.random:
+        rng = np.random.default_rng(args.seed)
+        shuffled_pool = list(pool[:max_size])
+        rng.shuffle(shuffled_pool)
+        random_vocabs = {size: sorted(shuffled_pool[:size]) for size in sizes}
+
     def build_vocab(size: int) -> list[tuple]:
         if args.dense:
             return build_dense_vocabulary(size, pool, C=C, k=k)
         elif args.sparse:
             return build_sparse_vocabulary(size, pool, C=C, k=k)
         elif args.random:
-            return build_random_vocabulary(size, pool, seed=args.seed)
+            return random_vocabs[size]
         else:
             return build_vocabulary_from_pool(size, pool, saturating)
 
     def is_converged(rows: list[list], patience: int) -> bool:
-        """True if the last `patience` rows have identical γ strings."""
+        """True if the last `patience` rows have identical γ strings (ignores inf rows)."""
         if len(rows) < patience:
             return False
         tail = [r[1:] for r in rows[-patience:]]  # strip vocab_size column
+        if any("inf" in str(v) for v in tail[0]):
+            return False  # don't converge on unconstrained rows
         return all(r == tail[0] for r in tail[1:])
 
     header = ["vocab_size"] + [f"M={m}" for m in M_list]
