@@ -106,6 +106,8 @@ class SNNAnalyzer(BaseAnalyzer):
             - prev_attractor_idx: Attractor idx of the temporally previous occurrence
             - next_attractor_idx: Attractor idx of the temporally next occurrence
             - num_clusters: Number of active clusters in this attractor
+            - mean_rates: Tuple of mean firing rates (Hz) per cluster in identity order,
+                          or None when rate data is unavailable (pre-existing recordings).
 
         If batch processing was used, also includes: repeat, seed, sweep_value, sweep_idx.
         """
@@ -131,7 +133,10 @@ class SNNAnalyzer(BaseAnalyzer):
             sweep_indices = entry.get("sweep_indices", [])
             has_metadata = bool(repeat_indices or seeds or sweep_values)
 
+            mean_rates_list = entry.get("occurrence_mean_rates", [])
+
             for i, (start, end, dur) in enumerate(zip(starts, ends, durations)):
+                rates_i = mean_rates_list[i] if i < len(mean_rates_list) else None
                 row = {
                     "clusters": identity,
                     "attractor_idx": attractor_id,
@@ -139,6 +144,7 @@ class SNNAnalyzer(BaseAnalyzer):
                     "t_end": end,
                     "duration": dur,
                     "num_clusters": num_clusters,
+                    "mean_rates": tuple(rates_i) if rates_i else None,
                     "_per_attractor_idx": i,  # Temporary, for computing occurrence
                 }
 
@@ -190,6 +196,7 @@ class SNNAnalyzer(BaseAnalyzer):
             "prev_attractor_idx",
             "next_attractor_idx",
             "num_clusters",
+            "mean_rates",
         ]
         # Add metadata columns at the end if present
         extra_cols = [c for c in df.columns if c not in base_cols]
@@ -420,6 +427,30 @@ class SNNAnalyzer(BaseAnalyzer):
     ) -> set:
         """Return the set of unique attractor identities."""
         return set(self.get_attractors_data(t_from=t_from, t_to=t_to).keys())
+
+    # --- Firing rate methods ---
+
+    def get_mean_firing_rate(self, *clusters: int) -> np.ndarray:
+        """Return mean firing rate (Hz) per cluster, averaged across all occurrences.
+
+        Args:
+            *clusters: Cluster indices identifying the attractor (must match
+                the identity tuple exactly as stored, i.e. sorted ascending).
+
+        Returns:
+            ndarray of shape (len(clusters),) with mean rate per cluster in Hz,
+            averaged over all occurrences.  Returns all-NaN when rate data is
+            unavailable (recordings predating occurrence_mean_rates support).
+
+        Raises:
+            KeyError: If the attractor identity is not found in attractors_data.
+        """
+        identity = tuple(clusters)
+        entry = self.attractors_data[identity]
+        rates_list = [r for r in entry.get("occurrence_mean_rates", []) if r]
+        if not rates_list:
+            return np.full(len(clusters), np.nan)
+        return np.array(rates_list).mean(axis=0)
 
     # --- Lifespan methods ---
 
