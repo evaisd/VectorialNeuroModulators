@@ -64,6 +64,7 @@ def extract_attractors(
         activity_matrix: np.ndarray,
         minimal_time_ms: float,
         dt_ms: float = .5,
+        rates: np.ndarray | None = None,
 ):
     """Extract attractor states and their occurrences from activity traces.
 
@@ -71,9 +72,15 @@ def extract_attractors(
         activity_matrix: Boolean activity matrix `(n_clusters, T)`.
         minimal_time_ms: Minimum duration for a state to count (ms).
         dt_ms: Time step in milliseconds.
+        rates: Optional firing rate matrix `(n_clusters, T)` in Hz.  When
+            provided, the mean firing rate of each cluster in the identity
+            tuple is recorded per occurrence in ``occurrence_mean_rates``.
 
     Returns:
         Mapping from attractor identity tuples to summary dictionaries.
+        Each entry has an ``occurrence_mean_rates`` field: a list of
+        arrays (one per occurrence) containing the mean firing rate (Hz)
+        of each cluster in the identity, in identity order.
     """
     minimal_steps = int(minimal_time_ms // dt_ms)
     changes = np.any(activity_matrix[:, 1:] != activity_matrix[:, :-1], axis=0)
@@ -96,6 +103,7 @@ def extract_attractors(
              "occurrence_durations": [],
              "total_duration": 0,
              "clusters": identity,
+             "occurrence_mean_rates": [],
              },
         )
         if entry["#"] == 0:
@@ -106,5 +114,10 @@ def extract_attractors(
         entry["ends"].append(end)
         entry["occurrence_durations"].append(duration_ms)
         entry["total_duration"] += duration_ms
+        if rates is not None and len(identity) > 0:
+            mean_rates = rates[list(identity), start:end].mean(axis=1).tolist()
+        else:
+            mean_rates = []
+        entry["occurrence_mean_rates"].append(mean_rates)
 
     return attractors

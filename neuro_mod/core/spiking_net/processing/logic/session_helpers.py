@@ -246,6 +246,7 @@ def merge_attractors_data(session_attractors, session_lengths, dt: float):
                     "occurrence_durations": [],
                     "total_duration": 0,
                     "clusters": identity,
+                    "occurrence_mean_rates": [],
                 }
                 next_idx += 1
             merged_entry = merged[identity]
@@ -258,6 +259,9 @@ def merge_attractors_data(session_attractors, session_lengths, dt: float):
             )
             merged_entry["occurrence_durations"].extend(entry["occurrence_durations"])
             merged_entry["total_duration"] += entry["total_duration"]
+            merged_entry["occurrence_mean_rates"].extend(
+                entry.get("occurrence_mean_rates", [[] for _ in entry["starts"]])
+            )
     for entry in merged.values():
         starts = entry["starts"]
         if len(starts) <= 1:
@@ -266,6 +270,7 @@ def merge_attractors_data(session_attractors, session_lengths, dt: float):
         entry["starts"] = [starts[i] for i in order]
         entry["ends"] = [entry["ends"][i] for i in order]
         entry["occurrence_durations"] = [entry["occurrence_durations"][i] for i in order]
+        entry["occurrence_mean_rates"] = [entry["occurrence_mean_rates"][i] for i in order]
     return merged
 
 

@@ -128,6 +128,7 @@ class SNNBatchProcessor:
                         activity,
                         self.minimal_life_span_ms,
                         self.dt * 1e3,
+                        rates=rates,
                     )
                 )
                 session_lengths.append(activity.shape[1])
