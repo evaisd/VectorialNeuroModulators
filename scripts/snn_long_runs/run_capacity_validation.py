@@ -71,6 +71,7 @@ def _build_cmd(
     log_level: str,
     style: str,
     raster_plots: str,
+    keep_raw: str,
 ) -> list[str]:
     return [
         PYTHON, str(SWEEP_SCRIPT),
@@ -82,7 +83,7 @@ def _build_cmd(
         "--executor", executor,
         "--max-workers", str(max_workers),
         "--lite-output",
-        "--keep-raw",
+        "--keep-raw", keep_raw,
         "--raster-plots", raster_plots,
         "--no-plots",
         "--no-compress",
@@ -154,6 +155,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "'none' = no rasters; "
             "'single' = one raster per sweep point (default); "
             "'all' = one raster per repeat."
+        ),
+    )
+    parser.add_argument(
+        "--keep-raw",
+        choices=["none", "single", "all"],
+        default="single",
+        help=(
+            "Raw spike-data retention after processing: "
+            "'none' = delete all; "
+            "'single' = keep one file per sweep point (default); "
+            "'all' = keep every repeat."
         ),
     )
     parser.add_argument(
@@ -236,6 +248,7 @@ def main() -> int:
             log_level=args.log_level,
             style=args.style,
             raster_plots=args.raster_plots,
+            keep_raw=args.keep_raw,
         )
 
         if args.dry_run:

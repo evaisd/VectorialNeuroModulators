@@ -265,8 +265,14 @@ def _build_parser(root: Path) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--keep-raw",
-        action="store_true",
-        help="Keep raw spike data after processing (default: delete to save space).",
+        choices=["none", "single", "all"],
+        default="none",
+        help=(
+            "Raw spike-data retention after processing: "
+            "'none' = delete all (default); "
+            "'single' = keep one file per sweep point (first repeat); "
+            "'all' = keep every repeat."
+        ),
     )
     parser.add_argument(
         "--no-compress",
@@ -743,11 +749,11 @@ def main() -> int:
                 except ValueError as exc:
                     print(f"Skipping PDF export in {subdir}: {exc}")
 
-    if not args.keep_raw:
+    if args.keep_raw == "none":
         raw_data_dir = save_root / "data"
         if raw_data_dir.exists():
             shutil.rmtree(raw_data_dir)
-    elif args.n_repeats > 1:
+    elif args.keep_raw == "single":
         _prune_raw_to_first_repeat(save_root)
 
     print(
