@@ -61,6 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--k", type=int, default=3)
     parser.add_argument("--M-min", type=int, default=1)
     parser.add_argument("--M-max", type=int, default=18)
+    parser.add_argument("--pool-size", type=int, default=-1)
     parser.add_argument(
         "--n-sizes",
         type=int,
@@ -83,7 +84,10 @@ def main() -> None:
     saturating = build_saturating_vocabulary(C=C, k=k)
     pool = all_attractors(C=C, k=k)  # 816 attractors for C=18, k=3
     min_size = len(saturating)
-    max_size = len(pool)
+    if args.pool_size == -1:
+        max_size = len(pool)
+    else:
+        max_size = min(args.pool_size, len(pool))
 
     sizes = geometric_sizes(min_size, max_size, n_points=args.n_sizes)
     print(f"C={C}, k={k}, |H_k|={max_size}, saturating={min_size}")
