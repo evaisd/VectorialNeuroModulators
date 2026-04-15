@@ -161,7 +161,7 @@ def _solve_one(args: tuple) -> tuple[int, int, float]:
     X = build_attractor_vectors(vocab, C=C)
     diff_vecs = build_difference_vectors(X, list(range(len(vocab))), k=k, bottleneck_only=True)
     if not diff_vecs:
-        return (len(vocab), M, float("inf"))
+        return (len(vocab), M, 1.)
     result = solve_subspace_sdp(diff_vecs, M=M, C=C)
     return (len(vocab), M, result["gamma"])
 
