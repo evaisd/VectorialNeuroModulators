@@ -43,6 +43,60 @@ def build_vocabulary_from_pool(
     return vocab
 
 
+def single_swap_neighbors(s: tuple, C: int) -> list[tuple]:
+    """Return all attractors reachable from s by a single cluster swap."""
+    s_set = set(s)
+    neighbors = []
+    for i in s_set:
+        for j in range(C):
+            if j not in s_set:
+                neighbors.append(tuple(sorted((s_set - {i}) | {j})))
+    return neighbors
+
+
+def build_dense_vocabulary(
+    n: int,
+    pool: list[tuple[int, ...]],
+    C: int,
+    k: int,
+) -> list[tuple[int, ...]]:
+    """Build a vocabulary of size n that greedily maximises intra-T single-swap pairs.
+
+    At each step the attractor with the most swap-neighbours already in T is added.
+    Ties are broken by total degree in the swap graph (most potential future edges).
+    The first seed is the highest-degree node in the swap graph.
+    """
+    pool_set = set(pool)
+    # Precompute swap neighbours within pool
+    neighbors: dict[tuple, list[tuple]] = {
+        s: [nb for nb in single_swap_neighbors(s, C) if nb in pool_set]
+        for s in pool
+    }
+    degree = {s: len(nb) for s, nb in neighbors.items()}
+
+    T: set[tuple] = set()
+    remaining: set[tuple] = set(pool)
+    # count of neighbours each candidate has inside T
+    nb_in_T: dict[tuple, int] = {s: 0 for s in pool}
+
+    # Seed: highest-degree node
+    seed = max(pool, key=lambda s: degree[s])
+    T.add(seed)
+    remaining.remove(seed)
+    for nb in neighbors[seed]:
+        nb_in_T[nb] += 1
+
+    while len(T) < n and remaining:
+        best = max(remaining, key=lambda s: (nb_in_T[s], degree[s]))
+        T.add(best)
+        remaining.remove(best)
+        for nb in neighbors[best]:
+            if nb in remaining:
+                nb_in_T[nb] += 1
+
+    return sorted(T)
+
+
 def geometric_sizes(lo: int, hi: int, n_points: int = 20) -> list[int]:
     """Return ~n_points integers spaced geometrically between lo and hi (inclusive)."""
     import math
@@ -69,6 +123,15 @@ def parse_args() -> argparse.Namespace:
         help="Number of vocabulary sizes to sample (geometric grid).",
     )
     parser.add_argument(
+        "--dense",
+        action="store_true",
+        default=False,
+        help=(
+            "Build vocabularies greedily to maximise intra-T single-swap pairs "
+            "(swap-dense construction) instead of the saturating-seeded lex pool."
+        ),
+    )
+    parser.add_argument(
         "--out",
         default=None,
         help="Optional path to write CSV output.",
@@ -90,7 +153,8 @@ def main() -> None:
         max_size = min(args.pool_size, len(pool))
 
     sizes = geometric_sizes(min_size, max_size, n_points=args.n_sizes)
-    print(f"C={C}, k={k}, |H_k|={max_size}, saturating={min_size}")
+    mode = "dense" if args.dense else "saturating-seeded"
+    print(f"C={C}, k={k}, |H_k|={max_size}, saturating={min_size}, mode={mode}")
     print(f"Vocabulary sizes: {sizes}")
     print(f"M range: {list(M_range)}\n")
 
@@ -100,7 +164,10 @@ def main() -> None:
     rows: list[list] = []
 
     for size in sizes:
-        vocab = build_vocabulary_from_pool(size, pool, saturating)
+        if args.dense:
+            vocab = build_dense_vocabulary(size, pool, C=C, k=k)
+        else:
+            vocab = build_vocabulary_from_pool(size, pool, saturating)
         assert len(vocab) == size, f"Expected {size} attractors, got {len(vocab)}"
 
         results = capacity_curve(vocab, M_range=M_range, C=C, k=k)
