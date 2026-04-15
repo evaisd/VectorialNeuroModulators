@@ -529,6 +529,39 @@ class SNNAnalyzer(BaseAnalyzer):
             probs.append(duration / window_duration_ms)
         return np.stack(probs, axis=0)
 
+    def get_marginal_probability(
+            self,
+            *clusters: int,
+            t_from: float | None = None,
+            t_to: float | None = None,
+    ) -> float:
+        """Return the fraction of simulation time during which all specified clusters were active.
+
+        A cluster is considered active whenever it appears in any joint attractor
+        pattern, regardless of what other clusters are co-active.  This captures
+        sustained or "pinned" cluster activity that would be missed by the exact
+        joint-pattern probability.
+
+        Args:
+            *clusters: Cluster indices that must all be present in the pattern.
+            t_from: Start of time window (seconds).
+            t_to: End of time window (seconds).
+
+        Returns:
+            Marginal occupancy probability in [0, 1].
+        """
+        cluster_set = set(clusters)
+        data = self.get_attractors_data(t_from=t_from, t_to=t_to)
+        total_duration_ms = self.total_duration_ms
+        if total_duration_ms <= 0:
+            return 0.0
+        marginal_ms = sum(
+            entry["total_duration"]
+            for identity, entry in data.items()
+            if cluster_set.issubset(identity)
+        )
+        return marginal_ms / total_duration_ms
+
     def get_attractor_probs(
             self,
             t_from: float | None = None,
