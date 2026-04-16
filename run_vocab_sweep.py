@@ -155,13 +155,30 @@ def geometric_sizes(lo: int, hi: int, n_points: int = 20) -> list[int]:
 def _solve_one(args: tuple) -> tuple[int, int, float]:
     """Worker: solve SDP for one (vocab_size, M) pair.
 
+    Difference vectors are generated for each vocabulary member against ALL
+    single-swap neighbors in the full H_k (not just intra-vocabulary pairs),
+    then deduplicated by directed cluster-pair (i -> j).  This gives a margin
+    that is physically bounded by sqrt(2/k) and removes the empty-constraint
+    sentinel that inflated sparse-vocabulary results.
+
     Returns (vocab_size, M, gamma).
     """
     vocab, M, C, k = args
-    X = build_attractor_vectors(vocab, C=C)
-    diff_vecs = build_difference_vectors(X, list(range(len(vocab))), k=k, bottleneck_only=True)
-    if not diff_vecs:
-        return (len(vocab), M, 1.)
+    # Collect unique directed pairs (i -> j) activated by the vocabulary:
+    # pair (i -> j) is activated by attractor S when i in S and j not in S.
+    seen: set[tuple[int, int]] = set()
+    diff_vecs: list[tuple[int, int, np.ndarray]] = []
+    scale = 1.0 / np.sqrt(k)
+    for s in vocab:
+        s_set = set(s)
+        for i in s_set:
+            for j in range(C):
+                if j not in s_set and (i, j) not in seen:
+                    seen.add((i, j))
+                    d = np.zeros(C)
+                    d[i] = scale
+                    d[j] = -scale
+                    diff_vecs.append((i, j, d))
     result = solve_subspace_sdp(diff_vecs, M=M, C=C)
     return (len(vocab), M, result["gamma"])
 
@@ -239,6 +256,26 @@ def parse_args() -> argparse.Namespace:
         help="Random seed for --random mode.",
     )
     parser.add_argument(
+        "--n-seeds",
+        type=int,
+        default=1,
+        help=(
+            "Number of independent random vocabularies to average over per size "
+            "(--random mode only). Seeds are derived from --seed + index."
+        ),
+    )
+    parser.add_argument(
+        "--K-max",
+        type=int,
+        default=None,
+        help=(
+            "Hard cap on the maximum vocabulary size. Useful for large C where "
+            "you want to stay in the sub-saturation regime without biasing the "
+            "random sampling (unlike --pool-size, this does not restrict the pool "
+            "from which random vocabularies are drawn)."
+        ),
+    )
+    parser.add_argument(
         "--out",
         default=None,
         help="Optional path to write CSV output.",
@@ -251,10 +288,21 @@ def main() -> None:
     C, k = args.C, args.k
     M_list = list(range(args.M_min, args.M_max + 1))
 
-    saturating = build_saturating_vocabulary(C=C, k=k)
     pool = all_attractors(C=C, k=k)
-    min_size = len(saturating)
+
+    # Determine min vocabulary size — use saturating set when available,
+    # otherwise fall back to ceil(2C/k) so non-divisible C values work too.
+    try:
+        saturating = build_saturating_vocabulary(C=C, k=k)
+        min_size = len(saturating)
+    except ValueError:
+        saturating = []
+        min_size = (2 * C + k - 1) // k  # ceil(2C/k)
+
+    # max_size: pool-size cap first, then K-max cap.
     max_size = len(pool) if args.pool_size == -1 else min(args.pool_size, len(pool))
+    if args.K_max is not None:
+        max_size = min(max_size, args.K_max)
 
     if args.step is not None:
         sizes = list(range(min_size, max_size + 1, args.step))
@@ -263,24 +311,31 @@ def main() -> None:
     else:
         sizes = geometric_sizes(min_size, max_size, n_points=args.n_sizes)
     mode = "dense" if args.dense else "sparse" if args.sparse else "random" if args.random else "saturating-seeded"
-    print(f"C={C}, k={k}, |H_k|={max_size}, saturating={min_size}, mode={mode}")
+    n_seeds = args.n_seeds if args.random else 1
+    print(f"C={C}, k={k}, |H_k|={len(pool)}, saturating≈{min_size}, mode={mode}")
+    if args.random and n_seeds > 1:
+        print(f"Averaging over {n_seeds} random seeds (base seed={args.seed})")
     print(f"Vocabulary sizes: {sizes}")
     print(f"M range: {M_list}  |  workers: {args.jobs}\n")
 
-    # For random mode, shuffle the pool once and slice — guarantees monotonicity.
+    # Pre-build all random vocabularies across seeds so workers are stateless.
+    # For each (seed_idx, size) we need a distinct random subset of pool.
     if args.random:
-        rng = np.random.default_rng(args.seed)
-        shuffled_pool = list(pool[:max_size])
-        rng.shuffle(shuffled_pool)
-        random_vocabs = {size: sorted(shuffled_pool[:size]) for size in sizes}
+        base_seed = args.seed if args.seed is not None else 0
+        seed_vocabs: list[dict[int, list[tuple]]] = []
+        for seed_idx in range(n_seeds):
+            rng = np.random.default_rng(base_seed + seed_idx)
+            shuffled = list(pool)  # sample from the full pool (no bias)
+            rng.shuffle(shuffled)
+            seed_vocabs.append({size: sorted(shuffled[:size]) for size in sizes})
 
-    def build_vocab(size: int) -> list[tuple]:
+    def build_vocab(size: int, seed_idx: int = 0) -> list[tuple]:
         if args.dense:
             return build_dense_vocabulary(size, pool, C=C, k=k)
         elif args.sparse:
             return build_sparse_vocabulary(size, pool, C=C, k=k)
         elif args.random:
-            return random_vocabs[size]
+            return seed_vocabs[seed_idx][size]
         else:
             return build_vocabulary_from_pool(size, pool, saturating)
 
@@ -300,20 +355,28 @@ def main() -> None:
 
     with ProcessPoolExecutor(max_workers=args.jobs) as executor:
         for size in sizes:
-            vocab = build_vocab(size)
-            assert len(vocab) == size
+            # Collect one set of gammas per seed, then average.
+            seed_gamma_lists: list[dict[int, float]] = []
+            for seed_idx in range(n_seeds):
+                vocab = build_vocab(size, seed_idx)
+                assert len(vocab) == size
+                futures = {
+                    executor.submit(_solve_one, (vocab, M, C, k)): M
+                    for M in M_list
+                }
+                sg: dict[int, float] = {}
+                for future in as_completed(futures):
+                    _, M, gamma = future.result()
+                    sg[M] = gamma
+                seed_gamma_lists.append(sg)
 
-            # Dispatch all M values for this size in parallel
-            futures = {
-                executor.submit(_solve_one, (vocab, M, C, k)): M
-                for M in M_list
-            }
-            size_results: dict[int, float] = {}
-            for future in as_completed(futures):
-                _, M, gamma = future.result()
-                size_results[M] = gamma
+            # Average Γ_min across seeds (NaN-safe: inf values kept as inf).
+            gammas: list[float] = []
+            for M in M_list:
+                vals = [sg[M] for sg in seed_gamma_lists]
+                finite = [v for v in vals if not (v != v)]  # filter NaN
+                gammas.append(float(np.mean(finite)) if finite else float("nan"))
 
-            gammas = [size_results[M] for M in M_list]
             row = [size] + [f"{g:.4f}" for g in gammas]
             rows.append(row)
             print(f"{size:<12}" + "".join(f"{g:>9.4f}" for g in gammas))
